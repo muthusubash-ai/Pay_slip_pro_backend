@@ -1,3 +1,4 @@
+from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from app import views
@@ -7,6 +8,10 @@ router = DefaultRouter()
 # We will register viewsets here (e.g. EmployeeViewSet, SalarySlipViewSet)
 
 urlpatterns = [
+    # Django Built-in Admin Panel
+    path("admin/", admin.site.urls),
+
+    # Router endpoints
     # Router endpoints
     path("api/v1/", include(router.urls)),
     path("api/v1/health", views.health_check, name="health_check"),
