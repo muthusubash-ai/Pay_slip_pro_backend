@@ -9,35 +9,37 @@ from app.models.payment import PaymentOrder
 
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ("email", "full_name", "role", "plan", "auth_provider", "is_active", "created_at")
+    list_display = ("id", "email", "full_name", "role", "plan", "auth_provider", "is_active", "created_at")
     search_fields = ("email", "full_name")
     list_filter = ("role", "plan", "is_active")
 
 
 @admin.register(Company)
 class CompanyAdmin(admin.ModelAdmin):
-    list_display = ("company_name", "company_email", "phone_number", "created_at")
-    search_fields = ("company_name", "company_email")
+    list_display = ("id", "company_name", "user", "pay_day", "financial_year_start", "created_at")
+    search_fields = ("company_name",)
 
 
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
-    list_display = ("employee_id", "full_name", "email", "designation", "department", "company")
-    search_fields = ("employee_id", "full_name", "email")
+    list_display = ("id", "employee_code", "full_name", "email", "department", "designation", "basic_salary", "user", "is_active")
+    search_fields = ("employee_code", "full_name", "email")
+    list_filter = ("department", "is_active")
 
 
 @admin.register(SalarySlip)
 class SalarySlipAdmin(admin.ModelAdmin):
-    list_display = ("slip_number", "employee", "company", "month", "year", "net_salary")
-    list_filter = ("month", "year")
+    list_display = ("id", "employee", "user", "month", "year", "gross_salary", "total_deductions", "net_pay", "status", "generated_at")
+    list_filter = ("month", "year", "status")
 
 
 @admin.register(Attendance)
 class AttendanceAdmin(admin.ModelAdmin):
-    list_display = ("employee", "company", "month", "year", "present_days", "leave_days")
+    list_display = ("id", "employee", "user", "date", "status")
+    list_filter = ("status", "date")
 
 
 @admin.register(PaymentOrder)
 class PaymentOrderAdmin(admin.ModelAdmin):
-    list_display = ("order_id", "user", "plan", "amount", "status", "payment_id", "created_at")
+    list_display = ("id", "order_id", "user", "plan", "amount", "status", "payment_id", "created_at")
     list_filter = ("status", "plan")
