@@ -24,10 +24,11 @@ def test_me_returns_current_plan(client, auth_headers):
     assert response.json()["plan"] == "enterprise"
 
 
-def test_starter_cannot_open_professional_features(client, auth_headers):
+def test_starter_gets_basic_dashboard_but_not_professional_features(client, auth_headers):
     set_plan("starter")
 
-    assert client.get("/api/v1/dashboard/stats", headers=auth_headers).status_code == 403
+    assert client.get("/api/v1/dashboard/stats", headers=auth_headers).status_code == 200
+    assert client.get("/api/v1/dashboard/payroll-summary", headers=auth_headers).status_code == 403
     assert client.get("/api/v1/company/", headers=auth_headers).status_code == 403
     assert client.get(
         "/api/v1/attendance/leave-summary?month=1&year=2026",

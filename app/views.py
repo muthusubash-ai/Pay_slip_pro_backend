@@ -79,6 +79,7 @@ from app.models.employee import Employee
 from app.plans import (
     PLAN_ENTERPRISE,
     PLAN_PROFESSIONAL,
+    PLAN_STARTER,
     get_employee_limit,
     require_minimum_plan,
 )
@@ -580,7 +581,7 @@ class DashboardViews:
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
     def get_stats(request):
-        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Payroll dashboard and reports")
+        require_minimum_plan(request.user, PLAN_STARTER, "Dashboard overview")
         res = dashboard_service.get_dashboard_stats(None, request.user)
         return Response(DashboardStatsSerializer(res).data)
 
