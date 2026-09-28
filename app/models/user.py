@@ -54,5 +54,19 @@ class User(AbstractBaseUser, TimestampModel):
     class Meta:
         db_table = "users"
 
+    @property
+    def is_staff(self):
+        return self.role == UserRole.admin or self.role == "admin"
+
+    @property
+    def is_superuser(self):
+        return self.role == UserRole.admin or self.role == "admin"
+
+    def has_perm(self, perm, obj=None):
+        return self.is_staff
+
+    def has_module_perms(self, app_label):
+        return self.is_staff
+
     def __str__(self):
         return self.email
