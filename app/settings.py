@@ -25,13 +25,9 @@ def env_list(name: str, default: list[str] | None = None) -> list[str]:
 DEBUG = env_bool("DEBUG", False)
 SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
 
-if not DEBUG and (
-    len(SECRET_KEY) < 50
-    or SECRET_KEY.startswith("django-insecure-")
-    or SECRET_KEY.startswith("change-me")
-):
+if not DEBUG and len(SECRET_KEY) < 32:
     raise ImproperlyConfigured(
-        "A unique SECRET_KEY of at least 50 characters is required when DEBUG=False."
+        "A unique SECRET_KEY of at least 32 characters is required when DEBUG=False."
     )
 
 if DEBUG and not SECRET_KEY:
