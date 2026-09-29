@@ -245,11 +245,19 @@ class AuthViews:
         elif request.method == "PUT":
             serializer = UpdateProfileRequestSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            user = auth_service.update_profile(
-                None,
-                request.user,
-                serializer.validated_data.get("full_name"),
-            )
+            full_name = serializer.validated_data.get("full_name")
+            if full_name:
+                user = auth_service.update_profile(
+                    None,
+                    request.user,
+                    full_name,
+                )
+            else:
+                user = request.user
+            company_name = serializer.validated_data.get("company_name")
+            if company_name is not None and company_name.strip():
+                company_service.update_company(None, user, {"company_name": company_name.strip()})
+                user.refresh_from_db()
             return Response(UserResponseSerializer(user).data)
 
     @staticmethod
@@ -484,13 +492,20 @@ class SalarySlipViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def generate_slips(request):
-        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Bulk salary slip generation")
         serializer = GenerateSlipsRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         month = serializer.validated_data["month"]
         year = serializer.validated_data["year"]
         slips = salary_service.generate_bulk_slips(None, request.user, month, year)
-        return Response({"generated": len(slips), "month": month, "year": year}, status=status.HTTP_201_CREATED)
+        msg = None
+        if len(slips) == 0:
+            msg = f"Salary slips for all employees have already been generated for {month}/{year}. If you want to re-generate, you must delete the existing salary slip first."
+        return Response({
+            "generated": len(slips),
+            "month": month,
+            "year": year,
+            "message": msg,
+        }, status=status.HTTP_201_CREATED)
 
     @staticmethod
     @api_view(["POST"])

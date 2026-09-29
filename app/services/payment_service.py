@@ -99,12 +99,15 @@ def verify_payment(user: User, razorpay_order_id: str, razorpay_payment_id: str,
         user.plan = payment_order.plan_name
         user.save(update_fields=["plan", "updated_at"])
 
-    logger.info("User %s successfully upgraded to plan: %s", user.email, user.plan)
+    user.refresh_from_db()
+    logger.info("User %s successfully upgraded to plan: %s in database", user.email, user.plan)
 
+    from app.serializers.auth import UserResponseSerializer
     return {
         "message": f"Payment successful! Plan upgraded to {payment_order.plan_name.upper()}.",
         "plan": user.plan,
         "payment_order_id": payment_order.id,
+        "user": UserResponseSerializer(user).data,
     }
 
 

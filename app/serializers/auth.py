@@ -32,6 +32,7 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
 
 class UpdateProfileRequestSerializer(serializers.Serializer):
     full_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    company_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     def validate_full_name(self, value):
         if not value:
@@ -50,6 +51,9 @@ class UpdateProfileRequestSerializer(serializers.Serializer):
 
 
 class UserResponseSerializer(serializers.ModelSerializer):
+    company_name = serializers.CharField(read_only=True)
+
     class Meta:
         model = User
-        fields = ["id", "email", "full_name", "role", "plan", "is_active", "created_at"]
+        fields = ["id", "email", "full_name", "company_name", "role", "plan", "is_active", "created_at"]
+

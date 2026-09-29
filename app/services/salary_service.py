@@ -1,7 +1,7 @@
 import logging
 import math
 
-from app.exceptions import ConflictError, NotFoundError
+from app.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.employee import Employee
 from app.models.salary_slip import SalarySlip, SlipStatus
 from app.models.user import User
@@ -21,8 +21,18 @@ def generate_slip_for_employee(
     
     if existing:
         raise ConflictError(
-            f"Salary slip already exists for {employee.full_name} - {month}/{year}"
+            f"Salary slip already exists for {employee.full_name} for {month}/{year}. "
+            f"A salary slip can only be generated once per month. "
+            f"If you want to re-generate, you must delete the existing salary slip first."
         )
+
+    if employee.date_of_joining:
+        if year < employee.date_of_joining.year or (
+            year == employee.date_of_joining.year and month < employee.date_of_joining.month
+        ):
+            raise BadRequestError(
+                f"Cannot generate salary slip for {month}/{year}. Employee {employee.full_name} joined on {employee.date_of_joining.strftime('%d %B %Y')}. Slips can only be generated from joining month onwards."
+            )
 
     # Auto-detect leave days from attendance records
     leave_days = get_leave_count(None, user, employee.id, month, year)
@@ -73,6 +83,12 @@ def generate_bulk_slips(
     employees = Employee.objects.filter(user=user, is_active=True)
     slips = []
     for emp in employees:
+        if emp.date_of_joining:
+            if year < emp.date_of_joining.year or (
+                year == emp.date_of_joining.year and month < emp.date_of_joining.month
+            ):
+                continue
+
         existing = SalarySlip.objects.filter(
             employee=emp,
             month=month,
