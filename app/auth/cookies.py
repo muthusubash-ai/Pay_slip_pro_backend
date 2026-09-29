@@ -12,14 +12,14 @@ def set_auth_cookies(response, tokens: dict) -> None:
         settings.AUTH_ACCESS_COOKIE_NAME,
         tokens["access_token"],
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-        path="/api/",
+        path="/",
         **common,
     )
     response.set_cookie(
         settings.AUTH_REFRESH_COOKIE_NAME,
         tokens["refresh_token"],
         max_age=settings.REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
-        path="/api/v1/auth/",
+        path="/",
         **common,
     )
 
