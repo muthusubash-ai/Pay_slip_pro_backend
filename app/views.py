@@ -2,7 +2,7 @@ import base64
 import io
 import logging
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timezone
 
 from django.conf import settings
 from app.models.user import User
@@ -800,7 +800,24 @@ class PaymentViews:
 @authentication_classes([])
 @permission_classes([AllowAny])
 def health_check(request):
-    return Response({"status": "healthy", "app": settings.APP_NAME})
+    now_utc = datetime.now(timezone.utc)
+    return Response({
+        "status": "healthy",
+        "app": settings.APP_NAME,
+        "server_time_utc": now_utc.isoformat(),
+        "timestamp_ms": int(now_utc.timestamp() * 1000),
+    })
+
+
+@api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
+def server_time(request):
+    now_utc = datetime.now(timezone.utc)
+    return Response({
+        "server_time_utc": now_utc.isoformat(),
+        "timestamp_ms": int(now_utc.timestamp() * 1000),
+    })
 
 
 @api_view(["GET"])
@@ -811,3 +828,4 @@ def root_view(request):
         "message": "Employee Salary Slip API is running.",
         "health_check": "/api/v1/health"
     })
+

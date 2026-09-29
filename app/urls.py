@@ -15,6 +15,7 @@ urlpatterns = [
     # Router endpoints
     path("api/v1/", include(router.urls)),
     path("api/v1/health", views.health_check, name="health_check"),
+    path("api/v1/system/time", views.server_time, name="server_time"),
     
     # Custom Auth Routes
     path("api/v1/auth/register", views.AuthViews.register, name="auth_register"),
