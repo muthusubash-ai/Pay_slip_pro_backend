@@ -5,6 +5,7 @@ from collections import Counter
 from datetime import datetime
 
 from django.conf import settings
+from app.models.user import User
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
@@ -185,7 +186,7 @@ class AuthViews:
     @throttle_classes([LoginIPRateThrottle, LoginAccountRateThrottle])
     def login(request):
         # Support both form-data (from OAuth2PasswordRequestForm) and raw JSON
-        username = request.data.get("username") or request.data.get("email")
+        username = (request.data.get("username") or request.data.get("email") or "").strip().lower()
         password = request.data.get("password")
         if not username or not password:
             raise BadRequestError("Username and password are required")
