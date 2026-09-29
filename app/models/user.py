@@ -54,6 +54,25 @@ class User(AbstractBaseUser, TimestampModel):
     class Meta:
         db_table = "users"
 
+    def set_password(self, raw_password):
+        if raw_password is None:
+            self.password = None
+        else:
+            from app.auth.jwt_handler import hash_password
+            self.password = hash_password(raw_password)
+
+    def check_password(self, raw_password):
+        if not self.password or not raw_password:
+            return False
+        from app.auth.jwt_handler import verify_password
+        return verify_password(raw_password, self.password)
+
+    def set_unusable_password(self):
+        self.password = None
+
+    def has_usable_password(self):
+        return bool(self.password)
+
     @property
     def is_staff(self):
         return self.role == UserRole.admin or self.role == "admin"
