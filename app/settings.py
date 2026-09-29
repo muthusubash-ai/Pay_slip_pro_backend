@@ -231,7 +231,7 @@ JWT_AUDIENCE = os.getenv("JWT_AUDIENCE", "payslippro-web")
 AUTH_ACCESS_COOKIE_NAME = "payslip_access"
 AUTH_REFRESH_COOKIE_NAME = "payslip_refresh"
 AUTH_COOKIE_SECURE = not DEBUG
-AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "Lax")
+AUTH_COOKIE_SAMESITE = os.getenv("AUTH_COOKIE_SAMESITE", "None" if not DEBUG else "Lax")
 AUTH_COOKIE_DOMAIN = os.getenv("AUTH_COOKIE_DOMAIN", "").strip() or None
 APP_NAME = os.getenv("APP_NAME", "Employee Salary Slip")
 
