@@ -56,8 +56,9 @@ def register_user(db, email: str, password: str, full_name: str) -> User:
 
 
 def authenticate_user(db, email: str, password: str) -> dict:
+    clean_email = (email or "").strip().lower()
     try:
-        user = User.objects.get(email=email)
+        user = User.objects.get(email__iexact=clean_email)
     except User.DoesNotExist:
         raise UnauthorizedError("Invalid email or password")
 
