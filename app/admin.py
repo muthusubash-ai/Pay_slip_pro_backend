@@ -7,36 +7,114 @@ from app.models.attendance import Attendance
 from app.models.payment import PaymentOrder
 
 
+class CompanyFilter(admin.SimpleListFilter):
+    title = "Company"
+    parameter_name = "company_user_id"
+
+    def lookups(self, request, model_admin):
+        companies = Company.objects.all().order_by("company_name")
+        return [(c.user_id, c.company_name) for c in companies]
+
+    def queryset(self, request, queryset):
+        if self.value():
+            # Matches user_id on Employee, SalarySlip, Attendance, PaymentOrder
+            return queryset.filter(user_id=self.value())
+        return queryset
+
+
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
-    list_display = ("id", "email", "full_name", "role", "plan", "auth_provider", "is_active", "created_at")
-    search_fields = ("email", "full_name")
+    list_display = (
+        "id",
+        "email",
+        "full_name",
+        "get_company_name",
+        "role",
+        "plan",
+        "auth_provider",
+        "is_active",
+        "created_at",
+    )
+    search_fields = ("email", "full_name", "company__company_name")
     list_filter = ("role", "plan", "is_active")
+
+    @admin.display(description="Company Name", ordering="company__company_name")
+    def get_company_name(self, obj):
+        company = getattr(obj, "company", None)
+        return company.company_name if company else "-"
 
 
 @admin.register(Company)
 class CompanyAdmin(admin.ModelAdmin):
-    list_display = ("id", "company_name", "user", "pay_day", "financial_year_start", "created_at")
-    search_fields = ("company_name",)
+    list_display = ("id", "company_name", "get_user_email", "pay_day", "financial_year_start", "created_at")
+    search_fields = ("company_name", "user__email", "user__full_name")
+
+    @admin.display(description="HR User Email", ordering="user__email")
+    def get_user_email(self, obj):
+        return obj.user.email if obj.user else "-"
 
 
 @admin.register(Employee)
 class EmployeeAdmin(admin.ModelAdmin):
-    list_display = ("id", "employee_code", "full_name", "email", "department", "designation", "basic_salary", "user", "is_active")
-    search_fields = ("employee_code", "full_name", "email")
-    list_filter = ("department", "is_active")
+    list_display = (
+        "id",
+        "employee_code",
+        "full_name",
+        "get_company_name",
+        "email",
+        "department",
+        "designation",
+        "basic_salary",
+        "is_active",
+    )
+    search_fields = ("employee_code", "full_name", "email", "user__company__company_name", "user__email")
+    list_filter = (CompanyFilter, "department", "is_active")
+
+    @admin.display(description="Company", ordering="user__company__company_name")
+    def get_company_name(self, obj):
+        if obj.user:
+            company = getattr(obj.user, "company", None)
+            return company.company_name if company else obj.user.email
+        return "-"
 
 
 @admin.register(SalarySlip)
 class SalarySlipAdmin(admin.ModelAdmin):
-    list_display = ("id", "employee", "user", "month", "year", "gross_salary", "total_deductions", "net_pay", "status", "generated_at")
-    list_filter = ("month", "year", "status")
+    list_display = (
+        "id",
+        "employee",
+        "get_company_name",
+        "month",
+        "year",
+        "gross_salary",
+        "total_deductions",
+        "net_pay",
+        "status",
+        "generated_at",
+    )
+    search_fields = ("employee__full_name", "employee__employee_code", "user__company__company_name", "user__email")
+    list_filter = (CompanyFilter, "month", "year", "status")
+
+    @admin.display(description="Company", ordering="user__company__company_name")
+    def get_company_name(self, obj):
+        if obj.user:
+            company = getattr(obj.user, "company", None)
+            return company.company_name if company else obj.user.email
+        return "-"
 
 
 @admin.register(Attendance)
 class AttendanceAdmin(admin.ModelAdmin):
-    list_display = ("id", "employee", "user", "date", "status")
-    list_filter = ("status", "date")
+    list_display = ("id", "employee", "get_company_name", "date", "status")
+    search_fields = ("employee__full_name", "employee__employee_code", "user__company__company_name", "user__email")
+    list_filter = (CompanyFilter, "status", "date")
+
+    @admin.display(description="Company", ordering="user__company__company_name")
+    def get_company_name(self, obj):
+        if obj.user:
+            company = getattr(obj.user, "company", None)
+            return company.company_name if company else obj.user.email
+        return "-"
 
 
 @admin.register(PaymentOrder)
@@ -44,6 +122,7 @@ class PaymentOrderAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "razorpay_order_id",
+        "get_company_name",
         "user",
         "plan_name",
         "amount",
@@ -51,4 +130,13 @@ class PaymentOrderAdmin(admin.ModelAdmin):
         "razorpay_payment_id",
         "created_at",
     )
-    list_filter = ("status", "plan_name")
+    search_fields = ("razorpay_order_id", "razorpay_payment_id", "user__company__company_name", "user__email")
+    list_filter = (CompanyFilter, "status", "plan_name")
+
+    @admin.display(description="Company", ordering="user__company__company_name")
+    def get_company_name(self, obj):
+        if obj.user:
+            company = getattr(obj.user, "company", None)
+            return company.company_name if company else obj.user.email
+        return "-"
+

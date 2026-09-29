@@ -87,5 +87,11 @@ class User(AbstractBaseUser, TimestampModel):
     def has_module_perms(self, app_label):
         return self.is_staff
 
+    @property
+    def company_name(self):
+        company = getattr(self, "company", None)
+        return company.company_name if company else "-"
+
     def __str__(self):
         return self.email
+

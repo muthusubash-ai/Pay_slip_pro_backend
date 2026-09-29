@@ -37,5 +37,13 @@ class Employee(TimestampModel):
         db_table = "employees"
         unique_together = (("user", "employee_code"),)
 
+    @property
+    def company_name(self):
+        if self.user:
+            company = getattr(self.user, "company", None)
+            return company.company_name if company else "-"
+        return "-"
+
     def __str__(self):
         return f"{self.full_name} ({self.employee_code})"
+
