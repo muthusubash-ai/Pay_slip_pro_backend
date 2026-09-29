@@ -17,6 +17,9 @@ class CompanyFilter(admin.SimpleListFilter):
 
     def queryset(self, request, queryset):
         if self.value():
+            # If the queryset is for User model, user id is 'id'
+            if queryset.model == User:
+                return queryset.filter(id=self.value())
             # Matches user_id on Employee, SalarySlip, Attendance, PaymentOrder
             return queryset.filter(user_id=self.value())
         return queryset
@@ -36,12 +39,13 @@ class UserAdmin(admin.ModelAdmin):
         "created_at",
     )
     search_fields = ("email", "full_name", "company__company_name")
-    list_filter = ("role", "plan", "is_active")
+    list_filter = (CompanyFilter, "role", "plan", "is_active")
 
     @admin.display(description="Company Name", ordering="company__company_name")
     def get_company_name(self, obj):
         company = getattr(obj, "company", None)
         return company.company_name if company else "-"
+
 
 
 @admin.register(Company)
