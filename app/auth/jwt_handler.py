@@ -10,7 +10,16 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    if not hashed_password:
+        return False
+    if hashed_password.startswith("pbkdf2_") or hashed_password.startswith("argon2"):
+        from django.contrib.auth.hashers import check_password
+        return check_password(plain_password, hashed_password)
+    try:
+        return pwd_context.verify(plain_password, hashed_password)
+    except Exception:
+        from django.contrib.auth.hashers import check_password
+        return check_password(plain_password, hashed_password)
 
 
 def hash_password(password: str) -> str:
