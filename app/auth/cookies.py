@@ -29,9 +29,9 @@ def clear_auth_cookies(response) -> None:
         "domain": settings.AUTH_COOKIE_DOMAIN,
         "samesite": settings.AUTH_COOKIE_SAMESITE,
     }
-    response.delete_cookie(settings.AUTH_ACCESS_COOKIE_NAME, path="/api/", **common)
+    response.delete_cookie(settings.AUTH_ACCESS_COOKIE_NAME, path="/", **common)
     response.delete_cookie(
         settings.AUTH_REFRESH_COOKIE_NAME,
-        path="/api/v1/auth/",
+        path="/",
         **common,
     )
