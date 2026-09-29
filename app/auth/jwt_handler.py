@@ -1,10 +1,10 @@
+import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 
+from django.conf import settings
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-
-from django.conf import settings
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -18,22 +18,40 @@ def hash_password(password: str) -> str:
 
 
 def create_access_token(data: dict) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(
         minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES
     )
     return jwt.encode(
-        {**data, "exp": expire, "type": "access", "jti": str(uuid.uuid4())},
+        {
+            **data,
+            "exp": expire,
+            "iat": now,
+            "iss": settings.JWT_ISSUER,
+            "aud": settings.JWT_AUDIENCE,
+            "type": "access",
+            "jti": str(uuid.uuid4()),
+        },
         settings.SECRET_KEY,
         settings.ALGORITHM,
     )
 
 
 def create_refresh_token(data: dict) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(
         days=settings.REFRESH_TOKEN_EXPIRE_DAYS
     )
     return jwt.encode(
-        {**data, "exp": expire, "type": "refresh", "jti": str(uuid.uuid4())},
+        {
+            **data,
+            "exp": expire,
+            "iat": now,
+            "iss": settings.JWT_ISSUER,
+            "aud": settings.JWT_AUDIENCE,
+            "type": "refresh",
+            "jti": str(uuid.uuid4()),
+        },
         settings.SECRET_KEY,
         settings.ALGORITHM,
     )
@@ -41,6 +59,16 @@ def create_refresh_token(data: dict) -> str:
 
 def decode_token(token: str) -> dict | None:
     try:
-        return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return jwt.decode(
+            token,
+            settings.SECRET_KEY,
+            algorithms=[settings.ALGORITHM],
+            audience=settings.JWT_AUDIENCE,
+            issuer=settings.JWT_ISSUER,
+        )
     except JWTError:
         return None
+
+
+def token_digest(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()

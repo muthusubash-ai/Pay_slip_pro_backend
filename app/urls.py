@@ -21,6 +21,7 @@ urlpatterns = [
     path("api/v1/auth/login", views.AuthViews.login, name="auth_login"),
     path("api/v1/auth/refresh", views.AuthViews.refresh, name="auth_refresh"),
     path("api/v1/auth/logout", views.AuthViews.logout, name="auth_logout"),
+    path("api/v1/auth/csrf", views.AuthViews.csrf, name="auth_csrf"),
     path("api/v1/auth/me", views.AuthViews.me, name="auth_me"),
     path("api/v1/auth/forgot-password", views.AuthViews.forgot_password, name="auth_forgot_password"),
     path("api/v1/auth/reset-password", views.AuthViews.reset_password, name="auth_reset_password"),

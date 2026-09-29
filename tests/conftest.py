@@ -1,11 +1,13 @@
 import pytest
+from django.conf import settings
+from django.core.cache import cache
 from rest_framework.test import APIClient
 
 
 @pytest.fixture(autouse=True)
 def enable_db_access(db):
     """Autouse fixture to enable database access for all tests."""
-    pass
+    cache.clear()
 
 
 class CompatibleAPIClient(APIClient):
@@ -39,7 +41,7 @@ def auth_headers(client):
     """Register and login a test user, returning the authorization bearer header."""
     client.post("/api/v1/auth/register", data={
         "email": "test@example.com",
-        "password": "testpassword123",
+        "password": "TestPassword123!",
         "full_name": "Test User",
     }, format="json")
 
@@ -51,8 +53,8 @@ def auth_headers(client):
     # login supports both username/email in request data
     response = client.post("/api/v1/auth/login", data={
         "username": "test@example.com",
-        "password": "testpassword123",
+        "password": "TestPassword123!",
     }, format="json")
     
-    token = response.json()["access_token"]
+    token = response.cookies[settings.AUTH_ACCESS_COOKIE_NAME].value
     return {"Authorization": f"Bearer {token}"}

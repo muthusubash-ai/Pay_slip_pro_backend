@@ -1,16 +1,27 @@
-import logging
 import base64
 import io
+import logging
 from collections import Counter
-from PIL import Image as PILImage
 from datetime import datetime
+
 from django.conf import settings
-from django.http import HttpResponse, Http404
+from django.http import HttpResponse
+from django.middleware.csrf import get_token
 from django.shortcuts import redirect
+from django.views.decorators.csrf import csrf_protect
+from PIL import Image as PILImage
+from PIL import ImageOps
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, parser_classes
+from rest_framework.decorators import (
+    api_view,
+    authentication_classes,
+    parser_classes,
+    permission_classes,
+    throttle_classes,
+)
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework.parsers import MultiPartParser, FormParser
 
 
 def _extract_dominant_color(img: PILImage.Image) -> str:
@@ -48,7 +59,8 @@ def _extract_dominant_color(img: PILImage.Image) -> str:
 
 def _process_logo(image_bytes: bytes) -> tuple[str, str]:
     """Process logo: keep original aspect ratio, resize to max 1080px, extract dominant color."""
-    img = PILImage.open(io.BytesIO(image_bytes))
+    with PILImage.open(io.BytesIO(image_bytes)) as source:
+        img = ImageOps.exif_transpose(source).copy()
 
     if img.mode in ("RGBA", "LA", "P"):
         bg = PILImage.new("RGB", img.size, (255, 255, 255))
@@ -73,8 +85,17 @@ def _process_logo(image_bytes: bytes) -> tuple[str, str]:
     return logo_data, hex_color
 
 from app.auth.authentication import IsAdmin, IsAuthenticated
-from app.exceptions import BadRequestError, ForbiddenError, UnauthorizedError
-from app.models.user import UserRole
+from app.auth.cookies import clear_auth_cookies, set_auth_cookies
+from app.auth.throttles import (
+    LoginAccountRateThrottle,
+    LoginIPRateThrottle,
+    LogoUploadRateThrottle,
+    PasswordResetRequestAccountRateThrottle,
+    PasswordResetRequestIPRateThrottle,
+    PasswordResetVerifyAccountRateThrottle,
+    PasswordResetVerifyIPRateThrottle,
+)
+from app.exceptions import BadRequestError, ForbiddenError
 from app.models.employee import Employee
 from app.plans import (
     PLAN_ENTERPRISE,
@@ -83,55 +104,55 @@ from app.plans import (
     get_employee_limit,
     require_minimum_plan,
 )
+from app.serializers.admin import (
+    PlatformStatsSerializer,
+    UpdateUserRoleRequestSerializer,
+    UserAdminResponseSerializer,
+)
+from app.serializers.attendance import (
+    AttendanceBulkCreateSerializer,
+    AttendanceCreateSerializer,
+    AttendanceResponseSerializer,
+    EmployeeLeavesSummarySerializer,
+)
 from app.serializers.auth import (
-    RegisterRequestSerializer,
-    LoginResponseSerializer,
-    RefreshRequestSerializer,
     ForgotPasswordRequestSerializer,
+    RefreshRequestSerializer,
+    RegisterRequestSerializer,
     ResetPasswordRequestSerializer,
     UpdateProfileRequestSerializer,
     UserResponseSerializer,
 )
 from app.serializers.company import (
-    CompanyUpdateSerializer,
     CompanyResponseSerializer,
-)
-from app.serializers.employee import (
-    EmployeeCreateSerializer,
-    EmployeeUpdateSerializer,
-    EmployeeResponseSerializer,
-    EmployeeListResponseSerializer,
-)
-from app.serializers.attendance import (
-    AttendanceCreateSerializer,
-    AttendanceBulkCreateSerializer,
-    AttendanceResponseSerializer,
-    EmployeeLeavesSummarySerializer,
-)
-from app.serializers.salary_slip import (
-    GenerateSlipsRequestSerializer,
-    SalarySlipResponseSerializer,
-    SalarySlipListResponseSerializer,
+    CompanyUpdateSerializer,
 )
 from app.serializers.dashboard import (
     DashboardStatsSerializer,
-    PayrollSummarySerializer,
     DepartmentBreakdownSerializer,
+    PayrollSummarySerializer,
 )
-from app.serializers.admin import (
-    UserAdminResponseSerializer,
-    UpdateUserRoleRequestSerializer,
-    PlatformStatsSerializer,
+from app.serializers.employee import (
+    EmployeeCreateSerializer,
+    EmployeeListResponseSerializer,
+    EmployeeResponseSerializer,
+    EmployeeUpdateSerializer,
+)
+from app.serializers.salary_slip import (
+    GenerateSlipsRequestSerializer,
+    SalarySlipListResponseSerializer,
+    SalarySlipResponseSerializer,
 )
 from app.services import (
+    admin_service,
+    attendance_service,
     auth_service,
     company_service,
+    dashboard_service,
     employee_service,
     salary_service,
-    attendance_service,
-    dashboard_service,
-    admin_service,
 )
+from app.upload_validation import validate_logo_upload
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +162,10 @@ logger = logging.getLogger(__name__)
 # -------------------------------------------------------------
 class AuthViews:
     @staticmethod
+    @csrf_protect
     @api_view(["POST"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
     def register(request):
         serializer = RegisterRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -154,7 +178,11 @@ class AuthViews:
         return Response(UserResponseSerializer(user).data, status=status.HTTP_201_CREATED)
 
     @staticmethod
+    @csrf_protect
     @api_view(["POST"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
+    @throttle_classes([LoginIPRateThrottle, LoginAccountRateThrottle])
     def login(request):
         # Support both form-data (from OAuth2PasswordRequestForm) and raw JSON
         username = request.data.get("username") or request.data.get("email")
@@ -162,23 +190,50 @@ class AuthViews:
         if not username or not password:
             raise BadRequestError("Username and password are required")
         res = auth_service.authenticate_user(None, username, password)
-        return Response(res)
+        response = Response({"message": "Login successful"})
+        set_auth_cookies(response, res)
+        get_token(request)
+        return response
 
     @staticmethod
+    @csrf_protect
     @api_view(["POST"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
     def refresh(request):
-        serializer = RefreshRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        res = auth_service.refresh_tokens(None, serializer.validated_data["refresh_token"])
-        return Response(res)
+        refresh_token = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        if not refresh_token:
+            serializer = RefreshRequestSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            refresh_token = serializer.validated_data["refresh_token"]
+        tokens = auth_service.refresh_tokens(None, refresh_token)
+        response = Response({"message": "Session refreshed"})
+        set_auth_cookies(response, tokens)
+        return response
 
     @staticmethod
+    @csrf_protect
     @api_view(["POST"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
     def logout(request):
-        serializer = RefreshRequestSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        auth_service.logout_user(None, serializer.validated_data["refresh_token"])
-        return Response(status=status.HTTP_204_NO_CONTENT)
+        refresh_token = request.COOKIES.get(settings.AUTH_REFRESH_COOKIE_NAME)
+        if not refresh_token and request.data.get("refresh_token"):
+            serializer = RefreshRequestSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            refresh_token = serializer.validated_data["refresh_token"]
+        if refresh_token:
+            auth_service.logout_user(None, refresh_token)
+        response = Response(status=status.HTTP_204_NO_CONTENT)
+        clear_auth_cookies(response)
+        return response
+
+    @staticmethod
+    @api_view(["GET"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
+    def csrf(request):
+        return Response({"csrf_token": get_token(request)})
 
     @staticmethod
     @api_view(["GET", "PUT"])
@@ -193,12 +248,18 @@ class AuthViews:
                 None,
                 request.user,
                 serializer.validated_data.get("full_name"),
-                serializer.validated_data.get("role"),
             )
             return Response(UserResponseSerializer(user).data)
 
     @staticmethod
+    @csrf_protect
     @api_view(["POST"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
+    @throttle_classes([
+        PasswordResetRequestIPRateThrottle,
+        PasswordResetRequestAccountRateThrottle,
+    ])
     def forgot_password(request):
         serializer = ForgotPasswordRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -213,7 +274,14 @@ class AuthViews:
         return Response({"message": "If the email exists, a reset code has been sent.", "sent": True})
 
     @staticmethod
+    @csrf_protect
     @api_view(["POST"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
+    @throttle_classes([
+        PasswordResetVerifyIPRateThrottle,
+        PasswordResetVerifyAccountRateThrottle,
+    ])
     def reset_password(request):
         serializer = ResetPasswordRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -227,37 +295,61 @@ class AuthViews:
 
     @staticmethod
     @api_view(["GET"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
     def google_login(request):
-        from app.services.google_auth_service import get_google_login_url
-        url = get_google_login_url()
-        return redirect(url)
+        from app.services.google_auth_service import create_google_login_request
+
+        url, oauth_state = create_google_login_request()
+        response = redirect(url)
+        response.set_cookie(
+            settings.GOOGLE_OAUTH_STATE_COOKIE_NAME,
+            oauth_state,
+            max_age=settings.GOOGLE_OAUTH_STATE_TTL_SECONDS,
+            path="/api/v1/auth/google/",
+            httponly=True,
+            secure=settings.AUTH_COOKIE_SECURE,
+            samesite="Lax",
+            domain=settings.AUTH_COOKIE_DOMAIN,
+        )
+        return response
 
     @staticmethod
     @api_view(["GET"])
+    @authentication_classes([])
+    @permission_classes([AllowAny])
     def google_callback(request):
         from app.services.google_auth_service import (
+            consume_google_oauth_state,
             exchange_code_for_tokens,
+            generate_tokens_for_user,
             get_google_user_info,
             get_or_create_google_user,
-            generate_tokens_for_user,
         )
         code = request.GET.get("code")
-        if not code:
-            raise BadRequestError("Code parameter is required")
+        oauth_state = request.GET.get("state", "")
+        cookie_state = request.COOKIES.get(settings.GOOGLE_OAUTH_STATE_COOKIE_NAME, "")
+        if request.GET.get("error") or not code:
+            raise BadRequestError("Google authentication was cancelled or denied")
+        code_verifier = consume_google_oauth_state(oauth_state, cookie_state)
         # Run async actions inside sync view
         import asyncio
-        google_tokens = asyncio.run(exchange_code_for_tokens(code))
+        google_tokens = asyncio.run(exchange_code_for_tokens(code, code_verifier))
         google_user = asyncio.run(get_google_user_info(google_tokens["access_token"]))
         
         user = get_or_create_google_user(None, google_user)
         tokens = generate_tokens_for_user(None, user)
         
-        redirect_url = (
-            f"{settings.FRONTEND_URL}/auth/google/callback"
-            f"?access_token={tokens['access_token']}"
-            f"&refresh_token={tokens['refresh_token']}"
+        response = redirect(f"{settings.FRONTEND_URL.rstrip('/')}/auth/google/callback")
+        set_auth_cookies(response, tokens)
+        response.delete_cookie(
+            settings.GOOGLE_OAUTH_STATE_COOKIE_NAME,
+            path="/api/v1/auth/google/",
+            domain=settings.AUTH_COOKIE_DOMAIN,
+            samesite="Lax",
         )
-        return redirect(redirect_url)
+        get_token(request)
+        return response
 
 
 # -------------------------------------------------------------
@@ -288,6 +380,7 @@ class CompanyViews:
     @api_view(["POST", "DELETE"])
     @permission_classes([IsAuthenticated])
     @parser_classes([MultiPartParser, FormParser])
+    @throttle_classes([LogoUploadRateThrottle])
     def company_logo(request):
         require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Custom company branding")
         company = company_service.get_company(None, request.user)
@@ -296,10 +389,7 @@ class CompanyViews:
             if not file_obj:
                 raise BadRequestError("No logo file uploaded")
             
-            contents = file_obj.read()
-            if len(contents) > settings.MAX_UPLOAD_SIZE:
-                raise BadRequestError("Logo file must be under 5MB.")
-                
+            contents = validate_logo_upload(file_obj)
             logo_data, hex_color = _process_logo(contents)
             
             if not company:
@@ -429,7 +519,7 @@ class SalarySlipViews:
         slip = salary_service.get_slip(None, request.user, slip_id)
         company = company_service.get_company(None, request.user)
         
-        from app.services.pdf_service import generate_pdf_bytes, MONTH_NAMES
+        from app.services.pdf_service import MONTH_NAMES, generate_pdf_bytes
         pdf_bytes = generate_pdf_bytes(slip, company, include_doj=include_doj)
         
         emp_name = slip.employee.full_name.replace(" ", "_")
@@ -472,8 +562,9 @@ class SalarySlipViews:
             company_name,
         )
         if success:
-            from app.models.salary_slip import SlipStatus
             from django.utils import timezone
+
+            from app.models.salary_slip import SlipStatus
             slip.status = SlipStatus.sent
             slip.emailed_at = timezone.now()
             slip.save()
@@ -705,11 +796,15 @@ class PaymentViews:
 
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def health_check(request):
     return Response({"status": "healthy", "app": settings.APP_NAME})
 
 
 @api_view(["GET"])
+@authentication_classes([])
+@permission_classes([AllowAny])
 def root_view(request):
     return Response({
         "message": "Employee Salary Slip API is running.",

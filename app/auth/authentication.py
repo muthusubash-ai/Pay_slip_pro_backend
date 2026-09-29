@@ -1,5 +1,7 @@
+from django.conf import settings
+from django.middleware.csrf import CsrfViewMiddleware
 from rest_framework.authentication import BaseAuthentication
-from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.permissions import BasePermission
 
 from app.auth.jwt_handler import decode_token
@@ -9,14 +11,17 @@ from app.models.user import User, UserRole
 class JWTAuthentication(BaseAuthentication):
     def authenticate(self, request):
         auth_header = request.headers.get("Authorization")
-        if not auth_header:
-            return None
-
-        parts = auth_header.split()
-        if len(parts) != 2 or parts[0].lower() != "bearer":
-            return None
-
-        token = parts[1]
+        cookie_authenticated = False
+        if auth_header:
+            parts = auth_header.split()
+            if len(parts) != 2 or parts[0].lower() != "bearer":
+                return None
+            token = parts[1]
+        else:
+            token = request.COOKIES.get(settings.AUTH_ACCESS_COOKIE_NAME)
+            if not token:
+                return None
+            cookie_authenticated = True
         payload = decode_token(token)
         if not payload or payload.get("type") != "access":
             raise AuthenticationFailed("Invalid token")
@@ -33,7 +38,18 @@ class JWTAuthentication(BaseAuthentication):
         if not user.is_active:
             raise AuthenticationFailed("User not found or inactive")
 
+        if cookie_authenticated:
+            self._enforce_csrf(request)
+
         return (user, token)
+
+    @staticmethod
+    def _enforce_csrf(request):
+        check = CsrfViewMiddleware(lambda req: None)
+        check.process_request(request)
+        reason = check.process_view(request, None, (), {})
+        if reason:
+            raise PermissionDenied(f"CSRF validation failed: {reason}")
 
 
 class IsAdmin(BasePermission):

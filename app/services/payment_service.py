@@ -1,7 +1,8 @@
 import logging
 import razorpay
 from django.conf import settings
-from app.exceptions import BadRequestError, NotFoundError
+from django.db import transaction
+from app.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.payment import PaymentOrder
 from app.models.user import User
 
@@ -57,37 +58,46 @@ def create_order(user: User, plan_name: str) -> dict:
 
 
 def verify_payment(user: User, razorpay_order_id: str, razorpay_payment_id: str, razorpay_signature: str) -> dict:
-    try:
-        payment_order = PaymentOrder.objects.get(razorpay_order_id=razorpay_order_id, user=user)
-    except PaymentOrder.DoesNotExist:
-        payment_order = PaymentOrder.objects.filter(user=user, status="created").last()
-        if not payment_order:
+    with transaction.atomic():
+        try:
+            payment_order = PaymentOrder.objects.select_for_update().get(
+                razorpay_order_id=razorpay_order_id,
+                user=user,
+            )
+        except PaymentOrder.DoesNotExist:
             raise NotFoundError("Payment order")
 
-    if razorpay_signature != "demo_test_signature":
+        if payment_order.status != "created":
+            raise ConflictError("Payment order has already been processed.")
+
+        expected_amount = PLAN_PRICES.get(payment_order.plan_name)
+        if expected_amount is None or payment_order.amount != expected_amount:
+            logger.error("Stored payment order %s failed plan/amount validation", razorpay_order_id)
+            raise BadRequestError("Payment order details are invalid.")
+
         try:
             client = _get_razorpay_client()
             client.utility.verify_payment_signature({
-                "razorpay_order_id": razorpay_order_id,
+                "razorpay_order_id": payment_order.razorpay_order_id,
                 "razorpay_payment_id": razorpay_payment_id,
                 "razorpay_signature": razorpay_signature,
             })
-        except Exception as e:
-            logger.warning("Signature verification check for order %s: %s", razorpay_order_id, str(e))
-            if not (settings.RAZORPAY_KEY_ID and settings.RAZORPAY_KEY_ID.startswith("rzp_test_")):
-                payment_order.status = "failed"
-                payment_order.save()
-                raise BadRequestError("Invalid payment signature verification failed.")
+        except Exception:
+            logger.warning("Payment signature verification failed for order %s", razorpay_order_id)
+            raise BadRequestError("Invalid payment signature.")
 
-    # Mark payment as paid
-    payment_order.razorpay_payment_id = razorpay_payment_id
-    payment_order.razorpay_signature = razorpay_signature
-    payment_order.status = "paid"
-    payment_order.save()
+        payment_order.razorpay_payment_id = razorpay_payment_id
+        payment_order.razorpay_signature = razorpay_signature
+        payment_order.status = "paid"
+        payment_order.save(update_fields=[
+            "razorpay_payment_id",
+            "razorpay_signature",
+            "status",
+            "updated_at",
+        ])
 
-    # Update user subscription plan
-    user.plan = payment_order.plan_name
-    user.save()
+        user.plan = payment_order.plan_name
+        user.save(update_fields=["plan", "updated_at"])
 
     logger.info("User %s successfully upgraded to plan: %s", user.email, user.plan)
 

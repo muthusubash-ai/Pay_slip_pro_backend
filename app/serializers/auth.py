@@ -8,12 +8,6 @@ class RegisterRequestSerializer(serializers.Serializer):
     full_name = serializers.CharField()
 
 
-class LoginResponseSerializer(serializers.Serializer):
-    access_token = serializers.CharField()
-    refresh_token = serializers.CharField()
-    token_type = serializers.CharField(default="bearer")
-
-
 class RefreshRequestSerializer(serializers.Serializer):
     refresh_token = serializers.CharField()
 
@@ -30,7 +24,13 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
 
 class UpdateProfileRequestSerializer(serializers.Serializer):
     full_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    role = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+
+    def validate(self, attrs):
+        if "role" in self.initial_data:
+            raise serializers.ValidationError({
+                "role": "Role cannot be changed through the profile endpoint."
+            })
+        return attrs
 
 
 class UserResponseSerializer(serializers.ModelSerializer):

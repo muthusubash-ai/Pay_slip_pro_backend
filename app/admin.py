@@ -41,5 +41,14 @@ class AttendanceAdmin(admin.ModelAdmin):
 
 @admin.register(PaymentOrder)
 class PaymentOrderAdmin(admin.ModelAdmin):
-    list_display = ("id", "order_id", "user", "plan", "amount", "status", "payment_id", "created_at")
-    list_filter = ("status", "plan")
+    list_display = (
+        "id",
+        "razorpay_order_id",
+        "user",
+        "plan_name",
+        "amount",
+        "status",
+        "razorpay_payment_id",
+        "created_at",
+    )
+    list_filter = ("status", "plan_name")
