@@ -19,7 +19,7 @@ def test_register_duplicate_email(client):
     response = client.post("/api/v1/auth/register", json={
         "email": "dup@example.com",
         "password": "TestPassword123!",
-        "full_name": "Dup User 2",
+        "full_name": "Dup User Two",
     })
     assert response.status_code == 409
 

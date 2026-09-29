@@ -1,5 +1,25 @@
+import re
 from rest_framework import serializers
 from app.models.employee import Employee
+
+
+def _validate_employee_fields(data: dict):
+    if "full_name" in data and data["full_name"]:
+        val = str(data["full_name"]).strip()
+        if not re.match(r"^[a-zA-Z\s.'-]+$", val):
+            raise serializers.ValidationError({"full_name": "Full name must contain only letters and spaces."})
+    if "bank_name" in data and data["bank_name"]:
+        val = str(data["bank_name"]).strip()
+        if not re.match(r"^[a-zA-Z\s.'-]+$", val):
+            raise serializers.ValidationError({"bank_name": "Bank name must contain only letters and spaces."})
+    if "phone" in data and data["phone"]:
+        val = str(data["phone"]).strip()
+        if not re.match(r"^\+?[0-9]{10,15}$", val):
+            raise serializers.ValidationError({"phone": "Phone number must contain only 10-15 digits."})
+    if "bank_account_number" in data and data["bank_account_number"]:
+        val = str(data["bank_account_number"]).strip()
+        if not re.match(r"^\d{6,20}$", val):
+            raise serializers.ValidationError({"bank_account_number": "Bank account number must contain only 6-20 digits."})
 
 
 class EmployeeCreateSerializer(serializers.ModelSerializer):
@@ -27,6 +47,10 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
             "tds",
             "esi",
         ]
+
+    def validate(self, attrs):
+        _validate_employee_fields(attrs)
+        return attrs
 
 
 class EmployeeUpdateSerializer(serializers.ModelSerializer):
@@ -56,6 +80,10 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
             field: {"required": False, "allow_null": True}
             for field in fields
         }
+
+    def validate(self, attrs):
+        _validate_employee_fields(attrs)
+        return attrs
 
 
 class EmployeeResponseSerializer(serializers.ModelSerializer):
