@@ -4,8 +4,10 @@ from django.db import migrations
 def add_enum_values(apps, schema_editor):
     if schema_editor.connection.vendor == 'postgresql':
         with schema_editor.connection.cursor() as cursor:
-            cursor.execute("ALTER TYPE attendancestatus ADD VALUE IF NOT EXISTS 'half_day';")
-            cursor.execute("ALTER TYPE attendancestatus ADD VALUE IF NOT EXISTS 'permission';")
+            cursor.execute("SELECT 1 FROM pg_type WHERE typname = 'attendancestatus';")
+            if cursor.fetchone():
+                cursor.execute("ALTER TYPE attendancestatus ADD VALUE IF NOT EXISTS 'half_day';")
+                cursor.execute("ALTER TYPE attendancestatus ADD VALUE IF NOT EXISTS 'permission';")
 
 
 class Migration(migrations.Migration):
