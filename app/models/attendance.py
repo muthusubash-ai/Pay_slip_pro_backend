@@ -7,11 +7,15 @@ class AttendanceStatus:
     present = "present"
     leave = "leave"
     weekoff = "weekoff"
+    half_day = "half_day"
+    permission = "permission"
 
     CHOICES = [
         (present, "present"),
         (leave, "leave"),
         (weekoff, "weekoff"),
+        (half_day, "half_day"),
+        (permission, "permission"),
     ]
 
 

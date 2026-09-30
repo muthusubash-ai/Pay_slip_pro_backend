@@ -1,6 +1,7 @@
 import calendar
 import logging
 from datetime import date
+from django.db import transaction
 
 from app.exceptions import NotFoundError
 from app.models.attendance import Attendance, AttendanceStatus
@@ -45,8 +46,10 @@ def bulk_mark_leaves(
     year: int,
     leave_dates: list[date],
     weekoff_dates: list[date] | None = None,
+    half_day_dates: list[date] | None = None,
+    permission_dates: list[date] | None = None,
 ) -> list[Attendance]:
-    """Mark leave and weekoff dates for an employee in a given month."""
+    """Mark leave, half-day, permission and weekoff dates for an employee in a given month."""
     try:
         employee = Employee.objects.get(id=employee_id, user=user)
     except Employee.DoesNotExist:
@@ -56,33 +59,70 @@ def bulk_mark_leaves(
     start_date = date(year, month, 1)
     end_date = date(year, month, total_days)
 
-    # Delete existing records for this employee/month
-    Attendance.objects.filter(
-        employee_id=employee_id,
-        date__range=(start_date, end_date)
-    ).delete()
+    with transaction.atomic():
+        # Delete existing records for this employee/month
+        Attendance.objects.filter(
+            employee_id=employee_id,
+            date__range=(start_date, end_date)
+        ).delete()
 
-    leave_set = set(leave_dates)
-    weekoff_set = set(weekoff_dates or [])
+        leave_set = set(leave_dates)
+        weekoff_set = set(weekoff_dates or [])
+        half_day_set = set(half_day_dates or [])
+        permission_set = set(permission_dates or [])
 
-    records = []
-    for day in range(1, total_days + 1):
-        d = date(year, month, day)
-        if d in leave_set:
-            status = AttendanceStatus.leave
-        elif d in weekoff_set:
-            status = AttendanceStatus.weekoff
-        else:
-            status = AttendanceStatus.present
-            
-        record = Attendance(
-            user=user,
-            employee=employee,
-            date=d,
-            status=status,
+        records = []
+        for day in range(1, total_days + 1):
+            d = date(year, month, day)
+            if d in leave_set:
+                status = AttendanceStatus.leave
+            elif d in half_day_set:
+                status = AttendanceStatus.half_day
+            elif d in permission_set:
+                status = AttendanceStatus.permission
+            elif d in weekoff_set:
+                status = AttendanceStatus.weekoff
+            else:
+                status = AttendanceStatus.present
+
+            record = Attendance(
+                user=user,
+                employee=employee,
+                date=d,
+                status=status,
+            )
+            record.save()
+            records.append(record)
+
+        # Calculate effective leave days:
+        # Full day leave = 1.0 day
+        # Half day leave = 0.5 day
+        # Permission = 0.25 day
+        effective_leave_days = (
+            len(leave_set) * 1.0 +
+            len(half_day_set) * 0.5 +
+            len(permission_set) * 0.25
         )
-        record.save()
-        records.append(record)
+
+        # Automatically synchronize existing SalarySlip if one was already generated
+        try:
+            from app.models.salary_slip import SalarySlip
+            existing_slip = SalarySlip.objects.filter(
+                user=user,
+                employee_id=employee_id,
+                month=month,
+                year=year,
+            ).first()
+            if existing_slip:
+                leave_ded = calculate_leave_deduction(float(employee.basic_salary), effective_leave_days, month, year)
+                existing_slip.leave_days = int(round(effective_leave_days))
+                existing_slip.leave_deduction = leave_ded
+                gross = float(existing_slip.gross_salary)
+                deductions = float(existing_slip.total_deductions)
+                existing_slip.net_pay = round(gross - deductions - leave_ded, 2)
+                existing_slip.save()
+        except Exception as e:
+            logger.warning("Could not auto-sync salary slip with updated attendance: %s", e)
 
     return records
 
@@ -104,10 +144,43 @@ def get_monthly_attendance(
     )
 
 
+def get_attendance_readiness(user: User, month: int, year: int) -> list[dict]:
+    """Return saved-day coverage for each active employee in the selected month."""
+    from django.db.models import Count
+
+    total_days = calendar.monthrange(year, month)[1]
+    start_date = date(year, month, 1)
+    end_date = date(year, month, total_days)
+    counts = dict(
+        Attendance.objects.filter(
+            user=user, date__range=(start_date, end_date), employee__user=user
+        ).values("employee_id").annotate(days=Count("date")).values_list("employee_id", "days")
+    )
+    return [
+        {
+            "employee_id": employee.id,
+            "recorded_days": counts.get(employee.id, 0),
+            "total_days": total_days,
+            "complete": counts.get(employee.id, 0) == total_days,
+        }
+        for employee in Employee.objects.filter(user=user, is_active=True)
+    ]
+
+
+def has_complete_attendance(user: User, employee_id: int, month: int, year: int) -> bool:
+    total_days = calendar.monthrange(year, month)[1]
+    return Attendance.objects.filter(
+        user=user,
+        employee_id=employee_id,
+        date__year=year,
+        date__month=month,
+    ).count() == total_days
+
+
 def get_leave_count(
     db, user: User, employee_id: int, month: int, year: int
 ) -> int:
-    """Count leave days for an employee in a given month."""
+    """Count full leave days for an employee in a given month."""
     total_days = calendar.monthrange(year, month)[1]
     start_date = date(year, month, 1)
     end_date = date(year, month, total_days)
@@ -117,6 +190,38 @@ def get_leave_count(
         user=user,
         date__range=(start_date, end_date),
         status=AttendanceStatus.leave
+    ).count()
+
+
+def get_half_day_count(
+    db, user: User, employee_id: int, month: int, year: int
+) -> int:
+    """Count half day leaves for an employee in a given month."""
+    total_days = calendar.monthrange(year, month)[1]
+    start_date = date(year, month, 1)
+    end_date = date(year, month, total_days)
+
+    return Attendance.objects.filter(
+        employee_id=employee_id,
+        user=user,
+        date__range=(start_date, end_date),
+        status=AttendanceStatus.half_day
+    ).count()
+
+
+def get_permission_count(
+    db, user: User, employee_id: int, month: int, year: int
+) -> int:
+    """Count permission days for an employee in a given month."""
+    total_days = calendar.monthrange(year, month)[1]
+    start_date = date(year, month, 1)
+    end_date = date(year, month, total_days)
+
+    return Attendance.objects.filter(
+        employee_id=employee_id,
+        user=user,
+        date__range=(start_date, end_date),
+        status=AttendanceStatus.permission
     ).count()
 
 
@@ -136,27 +241,55 @@ def get_weekoff_count(
     ).count()
 
 
-def calculate_leave_deduction(basic_salary: float, leave_days: int, month: int, year: int) -> float:
-    """Calculate salary deduction based on leave days only."""
+def calculate_leave_deduction(basic_salary: float, effective_leave_days: float, month: int, year: int) -> float:
+    """Calculate salary deduction based on effective leave days (1.0 for full leave, 0.5 for half day, 0.25 for permission)."""
     total_days = calendar.monthrange(year, month)[1]
-    if leave_days <= 0:
+    if effective_leave_days <= 0:
         return 0.0
     per_day = float(basic_salary) / total_days
-    return round(per_day * leave_days, 2)
+    return round(per_day * float(effective_leave_days), 2)
 
 
 def get_all_employees_leave_summary(
     db, user: User, month: int, year: int
 ) -> list[dict]:
-    """Get leave summary for all active employees for a given month."""
+    """Get leave summary for all active employees for a given month with net payable amount."""
+    from app.models.salary_slip import SalarySlip
     employees = Employee.objects.filter(user=user, is_active=True).order_by("full_name")
 
     total_days = calendar.monthrange(year, month)[1]
     summaries = []
     for emp in employees:
         leave_days = get_leave_count(None, user, emp.id, month, year)
+        half_day_days = get_half_day_count(None, user, emp.id, month, year)
+        permission_days = get_permission_count(None, user, emp.id, month, year)
         weekoff_days = get_weekoff_count(None, user, emp.id, month, year)
-        deduction = calculate_leave_deduction(float(emp.basic_salary), leave_days, month, year)
+
+        effective_leave_days = (
+            leave_days * 1.0 +
+            half_day_days * 0.5 +
+            permission_days * 0.25
+        )
+        deduction = calculate_leave_deduction(float(emp.basic_salary), effective_leave_days, month, year)
+
+        # Check existing salary slip or calculate on the fly
+        existing_slip = SalarySlip.objects.filter(
+            user=user, employee_id=emp.id, month=month, year=year
+        ).first()
+
+        if existing_slip:
+            gross = float(existing_slip.gross_salary)
+            std_deductions = float(existing_slip.total_deductions)
+            net_payable = round(max(0.0, gross - std_deductions - deduction), 2)
+        else:
+            gross = float(
+                emp.basic_salary + emp.hra + emp.conveyance_allowance + emp.medical_allowance + emp.special_allowance
+            )
+            std_deductions = float(
+                emp.pf_deduction + emp.professional_tax + emp.tds + emp.esi
+            )
+            net_payable = round(max(0.0, gross - std_deductions - deduction), 2)
+
         summaries.append({
             "employee_id": emp.id,
             "employee_name": emp.full_name,
@@ -164,9 +297,14 @@ def get_all_employees_leave_summary(
             "month": month,
             "year": year,
             "total_days": total_days,
-            "leave_days": leave_days,
+            "present_days": total_days - leave_days - half_day_days - permission_days - weekoff_days,
             "weekoff_days": weekoff_days,
-            "present_days": total_days - leave_days - weekoff_days,
+            "leave_days": leave_days,
+            "half_day_days": half_day_days,
+            "permission_days": permission_days,
+            "effective_leave_days": effective_leave_days,
             "leave_deduction": deduction,
+            "gross_salary": gross,
+            "net_payable": net_payable,
         })
     return summaries

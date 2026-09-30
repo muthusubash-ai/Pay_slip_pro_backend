@@ -10,8 +10,8 @@ def _validate_employee_fields(data: dict):
             raise serializers.ValidationError({"full_name": "Full name must contain only letters and spaces."})
     if "bank_name" in data and data["bank_name"]:
         val = str(data["bank_name"]).strip()
-        if not re.match(r"^[a-zA-Z\s.'-]+$", val):
-            raise serializers.ValidationError({"bank_name": "Bank name must contain only letters and spaces."})
+        if not re.fullmatch(r"[a-zA-Z0-9\s.&'()-]+", val):
+            raise serializers.ValidationError({"bank_name": "Bank name contains unsupported characters."})
     if "phone" in data and data["phone"]:
         val = str(data["phone"]).strip()
         if not re.match(r"^\+?[0-9]{10,15}$", val):

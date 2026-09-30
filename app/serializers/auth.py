@@ -8,6 +8,7 @@ class RegisterRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
     full_name = serializers.CharField()
+    phone = serializers.CharField(required=False, allow_blank=True, default="")
 
     def validate_full_name(self, value):
         val = value.strip()
@@ -33,6 +34,7 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
 class UpdateProfileRequestSerializer(serializers.Serializer):
     full_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     company_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
     def validate_full_name(self, value):
         if not value:
@@ -55,5 +57,5 @@ class UserResponseSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ["id", "email", "full_name", "company_name", "role", "plan", "is_active", "created_at"]
+        fields = ["id", "email", "full_name", "phone", "company_name", "role", "plan", "is_active", "created_at"]
 

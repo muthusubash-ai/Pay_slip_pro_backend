@@ -4,8 +4,8 @@ from app.serializers.employee import EmployeeResponseSerializer
 
 
 class GenerateSlipsRequestSerializer(serializers.Serializer):
-    month = serializers.IntegerField()
-    year = serializers.IntegerField()
+    month = serializers.IntegerField(min_value=1, max_value=12)
+    year = serializers.IntegerField(min_value=1900, max_value=2100)
 
 
 class SalarySlipResponseSerializer(serializers.ModelSerializer):

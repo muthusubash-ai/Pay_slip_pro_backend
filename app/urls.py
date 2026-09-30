@@ -34,6 +34,10 @@ urlpatterns = [
     path("api/v1/company/logo", views.CompanyViews.company_logo, name="company_logo"),
     
     # Custom Employee Routes
+    path("api/v1/banks/ifsc", views.ifsc_lookup, name="ifsc_lookup"),
+    path("api/v1/locations/address-suggestions", views.address_suggestions, name="address_suggestions"),
+    path("api/v1/locations/city-suggestions", views.city_suggestions, name="city_suggestions"),
+    path("api/v1/locations/pin", views.pin_lookup, name="pin_lookup"),
     path("api/v1/employees/", views.EmployeeViews.employee_list_create, name="employee_list_create"),
     path("api/v1/employees/<int:employee_id>", views.EmployeeViews.employee_detail, name="employee_detail"),
     
@@ -50,6 +54,7 @@ urlpatterns = [
     path("api/v1/attendance/", views.AttendanceViews.mark_attendance, name="mark_attendance"),
     path("api/v1/attendance/bulk", views.AttendanceViews.bulk_mark_leaves, name="bulk_mark_leaves"),
     path("api/v1/attendance/monthly", views.AttendanceViews.get_monthly_attendance, name="get_monthly_attendance"),
+    path("api/v1/attendance/readiness", views.AttendanceViews.get_readiness, name="attendance_readiness"),
     path("api/v1/attendance/leave-summary", views.AttendanceViews.get_leave_summary, name="get_leave_summary"),
     
     # Custom Dashboard Routes

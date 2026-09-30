@@ -36,6 +36,33 @@ def test_starter_gets_basic_dashboard_but_not_professional_features(client, auth
     ).status_code == 403
 
 
+def test_starter_can_save_monthly_attendance_and_then_generate_slip(client, auth_headers, sample_employee_payload):
+    set_plan("starter")
+    employee = client.post("/api/v1/employees/", json=sample_employee_payload, headers=auth_headers).json()
+    employee_id = employee["id"]
+    assert client.get(
+        f"/api/v1/attendance/monthly?employee_id={employee_id}&month=9&year=2026",
+        headers=auth_headers,
+    ).status_code == 200
+    assert client.post(
+        f"/api/v1/salary-slips/generate/{employee_id}",
+        json={"month": 9, "year": 2026}, headers=auth_headers,
+    ).status_code == 400
+    saved = client.post(
+        "/api/v1/attendance/bulk",
+        json={"employee_id": employee_id, "month": 9, "year": 2026, "leave_dates": [], "weekoff_dates": []},
+        headers=auth_headers,
+    )
+    assert saved.status_code == 201
+    readiness = client.get("/api/v1/attendance/readiness?month=9&year=2026", headers=auth_headers)
+    assert readiness.status_code == 200
+    assert readiness.json()[0]["complete"] is True
+    assert client.post(
+        f"/api/v1/salary-slips/generate/{employee_id}",
+        json={"month": 9, "year": 2026}, headers=auth_headers,
+    ).status_code == 201
+
+
 def test_starter_employee_limit(client, auth_headers, sample_employee_payload):
     set_plan("starter")
 

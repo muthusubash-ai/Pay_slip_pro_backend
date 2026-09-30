@@ -197,6 +197,8 @@ REST_FRAMEWORK = {
         "password_reset_verify_ip": os.getenv("PASSWORD_RESET_VERIFY_IP_RATE", "20/hour"),
         "password_reset_verify_account": os.getenv("PASSWORD_RESET_VERIFY_ACCOUNT_RATE", "5/hour"),
         "logo_upload": os.getenv("LOGO_UPLOAD_RATE", "20/hour"),
+        "ifsc_lookup": os.getenv("IFSC_LOOKUP_RATE", "120/hour"),
+        "location_lookup": os.getenv("LOCATION_LOOKUP_RATE", "120/hour"),
     },
 }
 

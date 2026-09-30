@@ -39,7 +39,7 @@ def _reset_code_digest(code: str) -> str:
     return hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 
-def register_user(db, email: str, password: str, full_name: str) -> User:
+def register_user(db, email: str, password: str, full_name: str, phone: str = "") -> User:
     if User.objects.filter(email=email).exists():
         raise ConflictError("Email already registered")
     password_user = User(email=email, full_name=full_name)
@@ -48,7 +48,10 @@ def register_user(db, email: str, password: str, full_name: str) -> User:
     except DjangoValidationError as exc:
         raise BadRequestError(" ".join(exc.messages))
     user = User(
-        email=email, password=hash_password(password), full_name=full_name
+        email=email,
+        password=hash_password(password),
+        full_name=full_name,
+        phone=phone.strip() if phone else None,
     )
     user.save()
     logger.info("User registered: %s", email)
@@ -151,9 +154,11 @@ def logout_user(db, refresh_token: str) -> None:
         pass
 
 
-def update_profile(db, user: User, full_name: str | None) -> User:
+def update_profile(db, user: User, full_name: str | None = None, phone: str | None = None) -> User:
     if full_name is not None:
         user.full_name = full_name
+    if phone is not None:
+        user.phone = phone.strip() if phone else None
     user.save()
     return user
 

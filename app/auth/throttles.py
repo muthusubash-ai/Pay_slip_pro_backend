@@ -63,3 +63,11 @@ class LogoUploadRateThrottle(UserRateThrottle):
         if request.method != "POST":
             return True
         return super().allow_request(request, view)
+
+
+class IfscLookupRateThrottle(UserRateThrottle):
+    scope = "ifsc_lookup"
+
+
+class LocationLookupRateThrottle(UserRateThrottle):
+    scope = "location_lookup"

@@ -1,11 +1,13 @@
 import base64
+import calendar
 import io
 import logging
+import re
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
+import httpx
 from django.conf import settings
-from app.models.user import User
 from django.http import HttpResponse
 from django.middleware.csrf import get_token
 from django.shortcuts import redirect
@@ -88,6 +90,8 @@ def _process_logo(image_bytes: bytes) -> tuple[str, str]:
 from app.auth.authentication import IsAdmin, IsAuthenticated
 from app.auth.cookies import clear_auth_cookies, set_auth_cookies
 from app.auth.throttles import (
+    IfscLookupRateThrottle,
+    LocationLookupRateThrottle,
     LoginAccountRateThrottle,
     LoginIPRateThrottle,
     LogoUploadRateThrottle,
@@ -98,6 +102,7 @@ from app.auth.throttles import (
 )
 from app.exceptions import BadRequestError, ForbiddenError
 from app.models.employee import Employee
+from app.models.salary_slip import SalarySlip
 from app.plans import (
     PLAN_ENTERPRISE,
     PLAN_PROFESSIONAL,
@@ -153,9 +158,76 @@ from app.services import (
     employee_service,
     salary_service,
 )
+from app.services.bank_lookup import lookup_ifsc
+from app.services.location_lookup import lookup_indian_pin, suggest_addresses, suggest_cities
 from app.upload_validation import validate_logo_upload
 
 logger = logging.getLogger(__name__)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([IfscLookupRateThrottle])
+def ifsc_lookup(request):
+    code = str(request.query_params.get("code", "")).strip().upper()
+    if not re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", code):
+        return Response({"detail": "Enter a valid 11-character IFSC code."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        details = lookup_ifsc(code)
+    except (httpx.HTTPError, ValueError):
+        logger.warning("IFSC lookup unavailable for %s", code)
+        return Response({"detail": "Branch lookup is temporarily unavailable. Try again shortly."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    if details is None:
+        return Response({"detail": "No branch found for this IFSC code."}, status=status.HTTP_404_NOT_FOUND)
+    return Response(details)
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([LocationLookupRateThrottle])
+def address_suggestions(request):
+    query = str(request.query_params.get("q", "")).strip()
+    if len(query) < 4 or len(query) > 120:
+        return Response({"detail": "Enter 4-120 characters to search for an address."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        suggestions = suggest_addresses(query)
+    except (httpx.HTTPError, TypeError, ValueError):
+        logger.warning("Address suggestions unavailable")
+        return Response({"detail": "Address suggestions are temporarily unavailable."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response({"items": suggestions})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([LocationLookupRateThrottle])
+def city_suggestions(request):
+    query = str(request.query_params.get("q", "")).strip()
+    state = str(request.query_params.get("state", "")).strip()
+    if not (2 <= len(query) <= 80 and 2 <= len(state) <= 100):
+        return Response({"detail": "Enter a state and at least 2 city characters."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        cities = suggest_cities(query, state)
+    except (httpx.HTTPError, TypeError, ValueError):
+        logger.warning("City suggestions unavailable")
+        return Response({"detail": "City suggestions are temporarily unavailable."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    return Response({"items": cities})
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+@throttle_classes([LocationLookupRateThrottle])
+def pin_lookup(request):
+    code = str(request.query_params.get("code", "")).strip()
+    if not re.fullmatch(r"\d{6}", code):
+        return Response({"detail": "Enter a valid 6-digit Indian PIN code."}, status=status.HTTP_400_BAD_REQUEST)
+    try:
+        details = lookup_indian_pin(code)
+    except (httpx.HTTPError, TypeError, ValueError):
+        logger.warning("PIN lookup unavailable for %s", code)
+        return Response({"detail": "PIN lookup is temporarily unavailable."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+    if details is None:
+        return Response({"detail": "No area found for this PIN code."}, status=status.HTTP_404_NOT_FOUND)
+    return Response(details)
 
 
 # -------------------------------------------------------------
@@ -175,6 +247,7 @@ class AuthViews:
             serializer.validated_data["email"],
             serializer.validated_data["password"],
             serializer.validated_data["full_name"],
+            serializer.validated_data.get("phone", ""),
         )
         return Response(UserResponseSerializer(user).data, status=status.HTTP_201_CREATED)
 
@@ -246,11 +319,13 @@ class AuthViews:
             serializer = UpdateProfileRequestSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             full_name = serializer.validated_data.get("full_name")
-            if full_name:
+            phone = serializer.validated_data.get("phone")
+            if full_name is not None or phone is not None:
                 user = auth_service.update_profile(
                     None,
                     request.user,
-                    full_name,
+                    full_name=full_name,
+                    phone=phone,
                 )
             else:
                 user = request.user
@@ -497,14 +572,28 @@ class SalarySlipViews:
         month = serializer.validated_data["month"]
         year = serializer.validated_data["year"]
         slips = salary_service.generate_bulk_slips(None, request.user, month, year)
+        attendance_pending = [
+            item["employee_id"]
+            for item in attendance_service.get_attendance_readiness(request.user, month, year)
+            if not item["complete"] and not SalarySlip.objects.filter(
+                user=request.user, employee_id=item["employee_id"], month=month, year=year
+            ).exists() and Employee.objects.filter(
+                user=request.user,
+                id=item["employee_id"],
+                date_of_joining__lte=date(year, month, calendar.monthrange(year, month)[1]),
+            ).exists()
+        ]
         msg = None
-        if len(slips) == 0:
+        if attendance_pending:
+            msg = f"Save complete attendance for {month}/{year} before generating slips for {len(attendance_pending)} remaining employee(s)."
+        elif len(slips) == 0:
             msg = f"Salary slips for all employees have already been generated for {month}/{year}. If you want to re-generate, you must delete the existing salary slip first."
         return Response({
             "generated": len(slips),
             "month": month,
             "year": year,
             "message": msg,
+            "attendance_pending_employee_ids": attendance_pending,
         }, status=status.HTTP_201_CREATED)
 
     @staticmethod
@@ -618,7 +707,6 @@ class AttendanceViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def mark_attendance(request):
-        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Attendance and leave tracking")
         serializer = AttendanceCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         res = attendance_service.mark_attendance(
@@ -634,7 +722,6 @@ class AttendanceViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def bulk_mark_leaves(request):
-        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Attendance and leave tracking")
         serializer = AttendanceBulkCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         records = attendance_service.bulk_mark_leaves(
@@ -645,6 +732,8 @@ class AttendanceViews:
             serializer.validated_data["year"],
             serializer.validated_data["leave_dates"],
             serializer.validated_data.get("weekoff_dates"),
+            serializer.validated_data.get("half_day_dates"),
+            serializer.validated_data.get("permission_dates"),
         )
         return Response({"count": len(records), "employee_id": serializer.validated_data["employee_id"]}, status=status.HTTP_201_CREATED)
 
@@ -652,7 +741,6 @@ class AttendanceViews:
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
     def get_monthly_attendance(request):
-        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Attendance and leave tracking")
         emp_id = request.GET.get("employee_id")
         month = request.GET.get("month")
         year = request.GET.get("year")
@@ -667,8 +755,18 @@ class AttendanceViews:
     @staticmethod
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
+    def get_readiness(request):
+        serializer = GenerateSlipsRequestSerializer(data=request.GET)
+        serializer.is_valid(raise_exception=True)
+        return Response(attendance_service.get_attendance_readiness(
+            request.user, serializer.validated_data["month"], serializer.validated_data["year"]
+        ))
+
+    @staticmethod
+    @api_view(["GET"])
+    @permission_classes([IsAuthenticated])
     def get_leave_summary(request):
-        require_minimum_plan(request.user, PLAN_ENTERPRISE, "Advanced attendance summaries")
+        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Attendance summaries")
         month = request.GET.get("month")
         year = request.GET.get("year")
         if not month or not year:
@@ -843,4 +941,3 @@ def root_view(request):
         "message": "Employee Salary Slip API is running.",
         "health_check": "/api/v1/health"
     })
-
