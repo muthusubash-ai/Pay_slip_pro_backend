@@ -34,6 +34,7 @@ class UserAdmin(admin.ModelAdmin):
         "get_company_name",
         "role",
         "plan",
+        "plan_expires_at",
         "auth_provider",
         "is_active",
         "created_at",

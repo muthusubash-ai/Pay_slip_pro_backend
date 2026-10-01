@@ -47,6 +47,7 @@ class User(AbstractBaseUser, TimestampModel):
     )
     is_active = models.BooleanField(default=True)
     plan = models.CharField(max_length=20, default="starter")
+    plan_expires_at = models.DateTimeField(null=True, blank=True)
     phone = models.CharField(max_length=20, null=True, blank=True)
     auth_provider = models.CharField(max_length=20, default="local")
     google_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
@@ -57,6 +58,19 @@ class User(AbstractBaseUser, TimestampModel):
 
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["full_name"]
+
+    def check_and_update_plan_expiry(self) -> bool:
+        """Check if paid subscription has expired. If so, auto-downgrade to starter."""
+        if self.is_platform_admin:
+            return False
+        if self.plan in ("professional", "enterprise") and self.plan_expires_at:
+            from django.utils import timezone
+            if timezone.now() > self.plan_expires_at:
+                self.plan = "starter"
+                self.plan_expires_at = None
+                self.save(update_fields=["plan", "plan_expires_at", "updated_at"])
+                return True
+        return False
 
     class Meta:
         db_table = "users"

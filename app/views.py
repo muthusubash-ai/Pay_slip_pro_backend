@@ -318,6 +318,7 @@ class AuthViews:
     @permission_classes([IsAuthenticated])
     def me(request):
         if request.method == "GET":
+            request.user.check_and_update_plan_expiry()
             return Response(UserResponseSerializer(request.user).data)
         elif request.method == "PUT":
             serializer = UpdateProfileRequestSerializer(data=request.data)

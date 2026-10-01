@@ -96,8 +96,18 @@ def verify_payment(user: User, razorpay_order_id: str, razorpay_payment_id: str,
             "updated_at",
         ])
 
+        from datetime import timedelta
+        from django.utils import timezone
+
         user.plan = payment_order.plan_name
-        user.save(update_fields=["plan", "updated_at"])
+        now = timezone.now()
+        current_expiry = user.plan_expires_at
+        # If renewing while existing paid plan is still active, extend by 30 days from expiry
+        if current_expiry and current_expiry > now:
+            user.plan_expires_at = current_expiry + timedelta(days=30)
+        else:
+            user.plan_expires_at = now + timedelta(days=30)
+        user.save(update_fields=["plan", "plan_expires_at", "updated_at"])
 
     user.refresh_from_db()
     logger.info("User %s successfully upgraded to plan: %s in database", user.email, user.plan)

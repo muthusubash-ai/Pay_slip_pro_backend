@@ -114,6 +114,8 @@ class EmployeeResponseSerializer(serializers.ModelSerializer):
             "tds",
             "esi",
             "is_active",
+            "created_at",
+            "updated_at",
         ]
 
 

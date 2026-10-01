@@ -40,6 +40,8 @@ class JWTAuthentication(BaseAuthentication):
         if payload.get("ver", 0) != user.auth_version:
             raise AuthenticationFailed("Session expired. Please sign in again.")
 
+        user.check_and_update_plan_expiry()
+
         if cookie_authenticated:
             self._enforce_csrf(request)
 
