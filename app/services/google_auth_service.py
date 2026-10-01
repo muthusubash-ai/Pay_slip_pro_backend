@@ -160,8 +160,9 @@ def generate_tokens_for_user(db, user: User) -> dict:
     if not user.is_active:
         raise UnauthorizedError("Account is deactivated")
 
-    access_token = create_access_token({"sub": str(user.id)})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    token_data = {"sub": str(user.id), "ver": user.auth_version}
+    access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
 
     db_token = RefreshToken(
         user=user,

@@ -40,6 +40,14 @@ class LoginAccountRateThrottle(AccountRateThrottle):
     scope = "login_account"
 
 
+class RegisterIPRateThrottle(IPRateThrottle):
+    scope = "register_ip"
+
+
+class RegisterAccountRateThrottle(AccountRateThrottle):
+    scope = "register_account"
+
+
 class PasswordResetRequestIPRateThrottle(IPRateThrottle):
     scope = "password_reset_request_ip"
 
@@ -63,6 +71,10 @@ class LogoUploadRateThrottle(UserRateThrottle):
         if request.method != "POST":
             return True
         return super().allow_request(request, view)
+
+
+class EmailSlipRateThrottle(UserRateThrottle):
+    scope = "email_slip"
 
 
 class IfscLookupRateThrottle(UserRateThrottle):

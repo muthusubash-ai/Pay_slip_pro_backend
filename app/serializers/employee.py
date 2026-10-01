@@ -62,6 +62,7 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
             "phone",
             "department",
             "designation",
+            "date_of_joining",
             "bank_account_number",
             "bank_name",
             "ifsc_code",
@@ -80,6 +81,7 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
             field: {"required": False, "allow_null": True}
             for field in fields
         }
+        extra_kwargs["date_of_joining"] = {"required": False, "allow_null": False}
 
     def validate(self, attrs):
         _validate_employee_fields(attrs)

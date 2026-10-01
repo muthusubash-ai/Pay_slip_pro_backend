@@ -2,8 +2,9 @@ import calendar
 import logging
 from datetime import date
 from django.db import transaction
+from django.db.models import F
 
-from app.exceptions import NotFoundError
+from app.exceptions import BadRequestError, NotFoundError
 from app.models.attendance import Attendance, AttendanceStatus
 from app.models.employee import Employee
 from app.models.user import User
@@ -19,6 +20,11 @@ def mark_attendance(
         employee = Employee.objects.get(id=employee_id, user=user)
     except Employee.DoesNotExist:
         raise NotFoundError("Employee")
+
+    if att_date < employee.date_of_joining:
+        raise BadRequestError(
+            f"Attendance cannot be marked before {employee.full_name}'s joining date ({employee.date_of_joining})."
+        )
 
     att_status = status
 
@@ -58,6 +64,14 @@ def bulk_mark_leaves(
     total_days = calendar.monthrange(year, month)[1]
     start_date = date(year, month, 1)
     end_date = date(year, month, total_days)
+    if end_date < employee.date_of_joining:
+        raise BadRequestError(
+            f"Attendance cannot be saved before {employee.full_name}'s joining date ({employee.date_of_joining})."
+        )
+    first_active_date = max(start_date, employee.date_of_joining)
+    selected_dates = set(leave_dates) | set(weekoff_dates or []) | set(half_day_dates or []) | set(permission_dates or [])
+    if any(day < first_active_date or day > end_date for day in selected_dates):
+        raise BadRequestError("Attendance dates must be on or after the employee's joining date in the selected month.")
 
     with transaction.atomic():
         # Delete existing records for this employee/month
@@ -72,7 +86,7 @@ def bulk_mark_leaves(
         permission_set = set(permission_dates or [])
 
         records = []
-        for day in range(1, total_days + 1):
+        for day in range(first_active_date.day, total_days + 1):
             d = date(year, month, day)
             if d in leave_set:
                 status = AttendanceStatus.leave
@@ -131,15 +145,21 @@ def get_monthly_attendance(
     db, user: User, employee_id: int, month: int, year: int
 ) -> list[Attendance]:
     """Get all attendance records for an employee in a month."""
+    try:
+        employee = Employee.objects.get(id=employee_id, user=user)
+    except Employee.DoesNotExist:
+        raise NotFoundError("Employee")
     total_days = calendar.monthrange(year, month)[1]
     start_date = date(year, month, 1)
     end_date = date(year, month, total_days)
+    if end_date < employee.date_of_joining:
+        return []
 
     return list(
         Attendance.objects.filter(
             employee_id=employee_id,
             user=user,
-            date__range=(start_date, end_date)
+            date__range=(max(start_date, employee.date_of_joining), end_date)
         ).order_by("date")
     )
 
@@ -153,28 +173,41 @@ def get_attendance_readiness(user: User, month: int, year: int) -> list[dict]:
     end_date = date(year, month, total_days)
     counts = dict(
         Attendance.objects.filter(
-            user=user, date__range=(start_date, end_date), employee__user=user
+            user=user, date__range=(start_date, end_date), employee__user=user,
+            date__gte=F("employee__date_of_joining"),
         ).values("employee_id").annotate(days=Count("date")).values_list("employee_id", "days")
     )
-    return [
-        {
+    results = []
+    for employee in Employee.objects.filter(user=user, is_active=True):
+        eligible = employee.date_of_joining <= end_date
+        expected_days = (end_date - max(start_date, employee.date_of_joining)).days + 1 if eligible else 0
+        results.append({
             "employee_id": employee.id,
             "recorded_days": counts.get(employee.id, 0),
-            "total_days": total_days,
-            "complete": counts.get(employee.id, 0) == total_days,
-        }
-        for employee in Employee.objects.filter(user=user, is_active=True)
-    ]
+            "total_days": expected_days,
+            "complete": eligible and counts.get(employee.id, 0) == expected_days,
+            "eligible": eligible,
+        })
+    return results
 
 
 def has_complete_attendance(user: User, employee_id: int, month: int, year: int) -> bool:
     total_days = calendar.monthrange(year, month)[1]
+    start_date = date(year, month, 1)
+    end_date = date(year, month, total_days)
+    try:
+        employee = Employee.objects.get(id=employee_id, user=user)
+    except Employee.DoesNotExist:
+        return False
+    if employee.date_of_joining > end_date:
+        return False
+    first_active_date = max(start_date, employee.date_of_joining)
+    expected_days = (end_date - first_active_date).days + 1
     return Attendance.objects.filter(
         user=user,
         employee_id=employee_id,
-        date__year=year,
-        date__month=month,
-    ).count() == total_days
+        date__range=(first_active_date, end_date),
+    ).count() == expected_days
 
 
 def get_leave_count(
@@ -189,6 +222,7 @@ def get_leave_count(
         employee_id=employee_id,
         user=user,
         date__range=(start_date, end_date),
+        date__gte=F("employee__date_of_joining"),
         status=AttendanceStatus.leave
     ).count()
 
@@ -205,6 +239,7 @@ def get_half_day_count(
         employee_id=employee_id,
         user=user,
         date__range=(start_date, end_date),
+        date__gte=F("employee__date_of_joining"),
         status=AttendanceStatus.half_day
     ).count()
 
@@ -221,6 +256,7 @@ def get_permission_count(
         employee_id=employee_id,
         user=user,
         date__range=(start_date, end_date),
+        date__gte=F("employee__date_of_joining"),
         status=AttendanceStatus.permission
     ).count()
 
@@ -237,6 +273,7 @@ def get_weekoff_count(
         employee_id=employee_id,
         user=user,
         date__range=(start_date, end_date),
+        date__gte=F("employee__date_of_joining"),
         status=AttendanceStatus.weekoff
     ).count()
 
@@ -255,11 +292,16 @@ def get_all_employees_leave_summary(
 ) -> list[dict]:
     """Get leave summary for all active employees for a given month with net payable amount."""
     from app.models.salary_slip import SalarySlip
-    employees = Employee.objects.filter(user=user, is_active=True).order_by("full_name")
-
     total_days = calendar.monthrange(year, month)[1]
+    start_date = date(year, month, 1)
+    end_date = date(year, month, total_days)
+    employees = Employee.objects.filter(
+        user=user, is_active=True, date_of_joining__lte=end_date
+    ).order_by("full_name")
+
     summaries = []
     for emp in employees:
+        active_days = (end_date - max(start_date, emp.date_of_joining)).days + 1
         leave_days = get_leave_count(None, user, emp.id, month, year)
         half_day_days = get_half_day_count(None, user, emp.id, month, year)
         permission_days = get_permission_count(None, user, emp.id, month, year)
@@ -296,8 +338,8 @@ def get_all_employees_leave_summary(
             "employee_code": emp.employee_code,
             "month": month,
             "year": year,
-            "total_days": total_days,
-            "present_days": total_days - leave_days - half_day_days - permission_days - weekoff_days,
+            "total_days": active_days,
+            "present_days": active_days - leave_days - half_day_days - permission_days - weekoff_days,
             "weekoff_days": weekoff_days,
             "leave_days": leave_days,
             "half_day_days": half_day_days,

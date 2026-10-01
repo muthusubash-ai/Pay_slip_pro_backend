@@ -63,6 +63,17 @@ def test_starter_can_save_monthly_attendance_and_then_generate_slip(client, auth
     ).status_code == 201
 
 
+def test_starter_cannot_use_professional_bulk_generation(client, auth_headers):
+    set_plan("starter")
+    response = client.post(
+        "/api/v1/salary-slips/generate",
+        json={"month": 9, "year": 2026},
+        headers=auth_headers,
+    )
+    assert response.status_code == 403
+    assert "professional" in response.json()["detail"].lower()
+
+
 def test_starter_employee_limit(client, auth_headers, sample_employee_payload):
     set_plan("starter")
 

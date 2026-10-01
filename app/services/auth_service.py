@@ -74,8 +74,9 @@ def authenticate_user(db, email: str, password: str) -> dict:
     if not user.is_active:
         raise UnauthorizedError("Account is deactivated")
         
-    access_token = create_access_token({"sub": str(user.id)})
-    refresh_token = create_refresh_token({"sub": str(user.id)})
+    token_data = {"sub": str(user.id), "ver": user.auth_version}
+    access_token = create_access_token(token_data)
+    refresh_token = create_refresh_token(token_data)
     
     db_token = RefreshToken(
         user=user,
@@ -112,6 +113,8 @@ def refresh_tokens(db, refresh_token: str) -> dict:
 
         if str(db_token.user_id) != str(user_id):
             raise UnauthorizedError("Invalid refresh token")
+        if payload.get("ver", 0) != db_token.user.auth_version:
+            raise UnauthorizedError("Session expired. Please sign in again.")
         if db_token.revoked:
             RefreshToken.objects.filter(user=db_token.user, revoked=False).update(revoked=True)
             replay_detected = True
@@ -126,8 +129,9 @@ def refresh_tokens(db, refresh_token: str) -> dict:
 
             db_token.revoked = True
             db_token.save(update_fields=["revoked"])
-            new_access = create_access_token({"sub": user_id})
-            new_refresh = create_refresh_token({"sub": user_id})
+            token_data = {"sub": user_id, "ver": user.auth_version}
+            new_access = create_access_token(token_data)
+            new_refresh = create_refresh_token(token_data)
             RefreshToken.objects.create(
                 user=user,
                 token=token_digest(new_refresh),
@@ -187,18 +191,21 @@ def reset_password_with_code(db, email: str, code: str, new_password: str) -> bo
     if not secrets.compare_digest(stored_digest, _reset_code_digest(code)):
         raise BadRequestError("Invalid reset code.")
 
-    try:
-        user = User.objects.get(email=email)
-    except User.DoesNotExist:
-        raise NotFoundError("User")
+    with transaction.atomic():
+        try:
+            user = User.objects.select_for_update().get(email=email)
+        except User.DoesNotExist:
+            raise NotFoundError("User") from None
 
-    try:
-        validate_password(new_password, user=user)
-    except DjangoValidationError as exc:
-        raise BadRequestError(" ".join(exc.messages))
+        try:
+            validate_password(new_password, user=user)
+        except DjangoValidationError as exc:
+            raise BadRequestError(" ".join(exc.messages)) from exc
 
-    user.password = hash_password(new_password)
-    user.save()
+        user.password = hash_password(new_password)
+        user.auth_version += 1
+        user.save(update_fields=["password", "auth_version", "updated_at"])
+        RefreshToken.objects.filter(user=user, revoked=False).update(revoked=True)
     cache.delete(cache_key)
     logger.info("Password reset successful for %s", email)
     return True

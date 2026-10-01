@@ -26,6 +26,10 @@ class UserManager(BaseUserManager):
 
     def create_superuser(self, email, password=None, **extra_fields):
         extra_fields.setdefault("role", UserRole.admin)
+        extra_fields.setdefault("is_platform_admin", True)
+        extra_fields.setdefault("plan", "enterprise")
+        if extra_fields["is_platform_admin"] is not True:
+            raise ValueError("Superuser must have is_platform_admin=True")
         return self.create_user(email, password, **extra_fields)
 
 
@@ -46,6 +50,8 @@ class User(AbstractBaseUser, TimestampModel):
     phone = models.CharField(max_length=20, null=True, blank=True)
     auth_provider = models.CharField(max_length=20, default="local")
     google_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    auth_version = models.PositiveIntegerField(default=0)
+    is_platform_admin = models.BooleanField(default=False)
 
     objects = UserManager()
 
@@ -76,11 +82,11 @@ class User(AbstractBaseUser, TimestampModel):
 
     @property
     def is_staff(self):
-        return self.role == UserRole.admin or self.role == "admin"
+        return self.is_active and self.is_platform_admin
 
     @property
     def is_superuser(self):
-        return self.role == UserRole.admin or self.role == "admin"
+        return self.is_active and self.is_platform_admin
 
     def has_perm(self, perm, obj=None):
         return self.is_staff
@@ -95,4 +101,3 @@ class User(AbstractBaseUser, TimestampModel):
 
     def __str__(self):
         return self.email
-

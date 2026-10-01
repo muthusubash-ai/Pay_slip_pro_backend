@@ -190,6 +190,8 @@ REST_FRAMEWORK = {
     "COERCE_DECIMAL_TO_STRING": False,
     "NUM_PROXIES": int(os.getenv("NUM_PROXIES", "1" if not DEBUG else "0")),
     "DEFAULT_THROTTLE_RATES": {
+        "register_ip": os.getenv("REGISTER_IP_RATE", "20/hour"),
+        "register_account": os.getenv("REGISTER_ACCOUNT_RATE", "3/hour"),
         "login_ip": os.getenv("LOGIN_IP_RATE", "20/min"),
         "login_account": os.getenv("LOGIN_ACCOUNT_RATE", "5/min"),
         "password_reset_request_ip": os.getenv("PASSWORD_RESET_REQUEST_IP_RATE", "10/hour"),
@@ -197,6 +199,7 @@ REST_FRAMEWORK = {
         "password_reset_verify_ip": os.getenv("PASSWORD_RESET_VERIFY_IP_RATE", "20/hour"),
         "password_reset_verify_account": os.getenv("PASSWORD_RESET_VERIFY_ACCOUNT_RATE", "5/hour"),
         "logo_upload": os.getenv("LOGO_UPLOAD_RATE", "20/hour"),
+        "email_slip": os.getenv("EMAIL_SLIP_RATE", "60/hour"),
         "ifsc_lookup": os.getenv("IFSC_LOOKUP_RATE", "120/hour"),
         "location_lookup": os.getenv("LOCATION_LOOKUP_RATE", "120/hour"),
     },

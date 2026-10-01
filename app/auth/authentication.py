@@ -5,7 +5,7 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.permissions import BasePermission
 
 from app.auth.jwt_handler import decode_token
-from app.models.user import User, UserRole
+from app.models.user import User
 
 
 class JWTAuthentication(BaseAuthentication):
@@ -37,6 +37,8 @@ class JWTAuthentication(BaseAuthentication):
 
         if not user.is_active:
             raise AuthenticationFailed("User not found or inactive")
+        if payload.get("ver", 0) != user.auth_version:
+            raise AuthenticationFailed("Session expired. Please sign in again.")
 
         if cookie_authenticated:
             self._enforce_csrf(request)
@@ -54,7 +56,7 @@ class JWTAuthentication(BaseAuthentication):
 
 class IsAdmin(BasePermission):
     def has_permission(self, request, view):
-        return request.user and request.user.is_authenticated and request.user.role == UserRole.admin
+        return bool(request.user and request.user.is_authenticated and request.user.is_platform_admin)
 
 
 class IsAuthenticated(BasePermission):

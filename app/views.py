@@ -95,6 +95,9 @@ from app.auth.throttles import (
     LoginAccountRateThrottle,
     LoginIPRateThrottle,
     LogoUploadRateThrottle,
+    EmailSlipRateThrottle,
+    RegisterIPRateThrottle,
+    RegisterAccountRateThrottle,
     PasswordResetRequestAccountRateThrottle,
     PasswordResetRequestIPRateThrottle,
     PasswordResetVerifyAccountRateThrottle,
@@ -239,6 +242,7 @@ class AuthViews:
     @api_view(["POST"])
     @authentication_classes([])
     @permission_classes([AllowAny])
+    @throttle_classes([RegisterIPRateThrottle, RegisterAccountRateThrottle])
     def register(request):
         serializer = RegisterRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -567,6 +571,7 @@ class SalarySlipViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def generate_slips(request):
+        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Bulk salary slip generation")
         serializer = GenerateSlipsRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         month = serializer.validated_data["month"]
@@ -639,6 +644,7 @@ class SalarySlipViews:
     @staticmethod
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
+    @throttle_classes([EmailSlipRateThrottle])
     def email_slip(request, slip_id):
         slip = salary_service.get_slip(None, request.user, slip_id)
         if not slip.employee.email:
@@ -742,13 +748,17 @@ class AttendanceViews:
     @permission_classes([IsAuthenticated])
     def get_monthly_attendance(request):
         emp_id = request.GET.get("employee_id")
-        month = request.GET.get("month")
-        year = request.GET.get("year")
-        if not emp_id or not month or not year:
+        if not emp_id:
             raise BadRequestError("employee_id, month, and year are required query params")
-            
+        serializer = GenerateSlipsRequestSerializer(data=request.GET)
+        serializer.is_valid(raise_exception=True)
+        try:
+            employee_id = int(emp_id)
+        except ValueError as exc:
+            raise BadRequestError("employee_id must be a valid number") from exc
         records = attendance_service.get_monthly_attendance(
-            None, request.user, int(emp_id), int(month), int(year)
+            None, request.user, employee_id,
+            serializer.validated_data["month"], serializer.validated_data["year"],
         )
         return Response(AttendanceResponseSerializer(records, many=True).data)
 
@@ -767,13 +777,10 @@ class AttendanceViews:
     @permission_classes([IsAuthenticated])
     def get_leave_summary(request):
         require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Attendance summaries")
-        month = request.GET.get("month")
-        year = request.GET.get("year")
-        if not month or not year:
-            raise BadRequestError("month and year are required query params")
-            
+        serializer = GenerateSlipsRequestSerializer(data=request.GET)
+        serializer.is_valid(raise_exception=True)
         res = attendance_service.get_all_employees_leave_summary(
-            None, request.user, int(month), int(year)
+            None, request.user, serializer.validated_data["month"], serializer.validated_data["year"],
         )
         return Response(EmployeeLeavesSummarySerializer(res, many=True).data)
 
