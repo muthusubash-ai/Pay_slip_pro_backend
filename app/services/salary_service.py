@@ -55,35 +55,50 @@ def generate_slip_for_employee(
         float(employee.basic_salary), effective_leaves, month, year
     )
 
-    gross = (
-        employee.basic_salary
-        + employee.hra
-        + employee.conveyance_allowance
-        + employee.medical_allowance
-        + employee.special_allowance
-    )
-    deductions = (
-        employee.pf_deduction + employee.professional_tax + employee.tds + employee.esi
-    )
-    net = float(gross) - float(deductions) - leave_ded
+    import calendar
+    from datetime import date
+
+    total_days = calendar.monthrange(year, month)[1]
+    start_date = date(year, month, 1)
+    end_date = date(year, month, total_days)
+
+    first_active_date = max(start_date, employee.date_of_joining) if employee.date_of_joining else start_date
+    active_days = (end_date - first_active_date).days + 1
+    is_joining_month = bool(employee.date_of_joining and employee.date_of_joining > start_date)
+    proration = (active_days / total_days) if is_joining_month and total_days > 0 else 1.0
+
+    basic = round(float(employee.basic_salary) * proration, 2)
+    hra = round(float(employee.hra) * proration, 2)
+    conveyance = round(float(employee.conveyance_allowance) * proration, 2)
+    medical = round(float(employee.medical_allowance) * proration, 2)
+    special = round(float(employee.special_allowance) * proration, 2)
+    gross = round(basic + hra + conveyance + medical + special, 2)
+
+    pf = round(float(employee.pf_deduction) * proration, 2)
+    pt = round(float(employee.professional_tax) * proration, 2)
+    tds = round(float(employee.tds) * proration, 2)
+    esi = round(float(employee.esi) * proration, 2)
+    deductions = round(pf + pt + tds + esi, 2)
+
+    net = round(max(0.0, gross - deductions - leave_ded), 2)
 
     slip = SalarySlip(
         user=user,
         employee=employee,
         month=month,
         year=year,
-        basic_salary=employee.basic_salary,
-        hra=employee.hra,
-        conveyance_allowance=employee.conveyance_allowance,
-        medical_allowance=employee.medical_allowance,
-        special_allowance=employee.special_allowance,
+        basic_salary=basic,
+        hra=hra,
+        conveyance_allowance=conveyance,
+        medical_allowance=medical,
+        special_allowance=special,
         gross_salary=gross,
-        pf_deduction=employee.pf_deduction,
-        professional_tax=employee.professional_tax,
-        tds=employee.tds,
-        esi=employee.esi,
+        pf_deduction=pf,
+        professional_tax=pt,
+        tds=tds,
+        esi=esi,
         total_deductions=deductions,
-        leave_days=leave_days,
+        leave_days=int(round(effective_leaves)),
         leave_deduction=leave_ded,
         net_pay=net,
         status=SlipStatus.generated,

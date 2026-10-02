@@ -290,7 +290,7 @@ def calculate_leave_deduction(basic_salary: float, effective_leave_days: float, 
 def get_all_employees_leave_summary(
     db, user: User, month: int, year: int
 ) -> list[dict]:
-    """Get leave summary for all active employees for a given month with net payable amount."""
+    """Get leave summary for all active employees for a given month with net payable amount counted from joining date."""
     from app.models.salary_slip import SalarySlip
     total_days = calendar.monthrange(year, month)[1]
     start_date = date(year, month, 1)
@@ -301,7 +301,8 @@ def get_all_employees_leave_summary(
 
     summaries = []
     for emp in employees:
-        active_days = (end_date - max(start_date, emp.date_of_joining)).days + 1
+        first_active_date = max(start_date, emp.date_of_joining) if emp.date_of_joining else start_date
+        active_days = (end_date - first_active_date).days + 1
         leave_days = get_leave_count(None, user, emp.id, month, year)
         half_day_days = get_half_day_count(None, user, emp.id, month, year)
         permission_days = get_permission_count(None, user, emp.id, month, year)
@@ -314,6 +315,9 @@ def get_all_employees_leave_summary(
         )
         deduction = calculate_leave_deduction(float(emp.basic_salary), effective_leave_days, month, year)
 
+        is_joining_month = bool(emp.date_of_joining and emp.date_of_joining > start_date)
+        proration = (active_days / total_days) if is_joining_month and total_days > 0 else 1.0
+
         # Check existing salary slip or calculate on the fly
         existing_slip = SalarySlip.objects.filter(
             user=user, employee_id=emp.id, month=month, year=year
@@ -322,14 +326,16 @@ def get_all_employees_leave_summary(
         if existing_slip:
             gross = float(existing_slip.gross_salary)
             std_deductions = float(existing_slip.total_deductions)
-            net_payable = round(max(0.0, gross - std_deductions - deduction), 2)
+            net_payable = float(existing_slip.net_pay)
         else:
-            gross = float(
+            full_gross = float(
                 emp.basic_salary + emp.hra + emp.conveyance_allowance + emp.medical_allowance + emp.special_allowance
             )
-            std_deductions = float(
+            full_std_deductions = float(
                 emp.pf_deduction + emp.professional_tax + emp.tds + emp.esi
             )
+            gross = round(full_gross * proration, 2)
+            std_deductions = round(full_std_deductions * proration, 2)
             net_payable = round(max(0.0, gross - std_deductions - deduction), 2)
 
         summaries.append({
@@ -348,5 +354,7 @@ def get_all_employees_leave_summary(
             "leave_deduction": deduction,
             "gross_salary": gross,
             "net_payable": net_payable,
+            "is_joining_month": is_joining_month,
+            "date_of_joining": emp.date_of_joining.isoformat() if emp.date_of_joining else None,
         })
     return summaries
