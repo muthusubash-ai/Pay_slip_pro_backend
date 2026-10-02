@@ -352,15 +352,29 @@ class AuthViews:
     def forgot_password(request):
         serializer = ForgotPasswordRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        email = serializer.validated_data["email"]
+        email = serializer.validated_data["email"].strip().lower()
+
+        from app.models.user import User
+        if not User.objects.filter(email__iexact=email).exists():
+            return Response(
+                {"detail": "This email is not registered. Please register first.", "sent": False},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         code = auth_service.generate_reset_code(None, email)
         if code:
             from app.services.email_service import send_password_reset_email
             sent = send_password_reset_email(email, code)
             if sent:
-                return Response({"message": "Reset code sent to your email.", "sent": True})
-            return Response({"message": "Failed to send email. Check SMTP settings.", "sent": False})
-        return Response({"message": "If the email exists, a reset code has been sent.", "sent": True})
+                return Response({"message": "Reset code sent to your email. Check your inbox.", "sent": True})
+            return Response(
+                {"detail": "Failed to send email. Check SMTP settings.", "sent": False},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(
+            {"detail": "This email is not registered. Please register first.", "sent": False},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     @staticmethod
     @csrf_protect
@@ -376,8 +390,8 @@ class AuthViews:
         serializer.is_valid(raise_exception=True)
         auth_service.reset_password_with_code(
             None,
-            serializer.validated_data["email"],
-            serializer.validated_data["token"],
+            serializer.validated_data["email"].strip().lower(),
+            serializer.validated_data["token"].strip(),
             serializer.validated_data["new_password"],
         )
         return Response({"message": "Password reset successful. You can now login with your new password."})

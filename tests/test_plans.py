@@ -114,3 +114,42 @@ def test_enterprise_can_open_enterprise_insights(client, auth_headers):
         "/api/v1/attendance/leave-summary?month=1&year=2026",
         headers=auth_headers,
     ).status_code == 200
+
+
+def test_plan_expiry_sets_is_plan_expired_and_restricts_access(client, auth_headers):
+    from datetime import timedelta
+    from django.utils import timezone
+
+    user = User.objects.get(email="test@example.com")
+    user.plan = "professional"
+    user.plan_expires_at = timezone.now() - timedelta(days=2)
+    user.save(update_fields=["plan", "plan_expires_at", "updated_at"])
+
+    res = client.get("/api/v1/auth/me", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["plan"] == "professional"
+    assert data["is_plan_expired"] is True
+    assert data["plan_days_left"] == 0
+
+    # Professional features are restricted
+    assert client.get("/api/v1/company/", headers=auth_headers).status_code == 403
+
+
+def test_plan_active_returns_not_expired(client, auth_headers):
+    from datetime import timedelta
+    from django.utils import timezone
+
+    user = User.objects.get(email="test@example.com")
+    user.plan = "professional"
+    user.plan_expires_at = timezone.now() + timedelta(days=15)
+    user.save(update_fields=["plan", "plan_expires_at", "updated_at"])
+
+    res = client.get("/api/v1/auth/me", headers=auth_headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert data["plan"] == "professional"
+    assert data["is_plan_expired"] is False
+    assert data["plan_days_left"] >= 14
+
+    assert client.get("/api/v1/company/", headers=auth_headers).status_code == 200

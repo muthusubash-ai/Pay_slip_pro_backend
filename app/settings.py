@@ -115,6 +115,11 @@ DATABASES = {
 # Custom User Model
 AUTH_USER_MODEL = "app.User"
 
+# Dedicated Authentication Backends (strictly uses admin_password for Django admin)
+AUTHENTICATION_BACKENDS = [
+    "app.auth.admin_backend.DjangoAdminAuthBackend",
+]
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -124,7 +129,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 # Internationalization
 LANGUAGE_CODE = "en-us"
-TIME_ZONE = "UTC"
+TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
 

@@ -169,22 +169,29 @@ def update_profile(db, user: User, full_name: str | None = None, phone: str | No
 
 def generate_reset_code(db, email: str) -> str | None:
     """Generate a 6-digit reset code for the user email."""
-    if not User.objects.filter(email=email).exists():
+    clean_email = (email or "").strip().lower()
+    if not User.objects.filter(email__iexact=clean_email).exists():
         return None
 
     code = "".join(secrets.choice("0123456789") for _ in range(6))
     cache.set(
-        _reset_code_cache_key(email),
+        _reset_code_cache_key(clean_email),
         _reset_code_digest(code),
         timeout=RESET_CODE_TTL_SECONDS,
     )
-    logger.info("Reset code generated for %s", email)
+    logger.info("Reset code generated for %s", clean_email)
     return code
 
 
 def reset_password_with_code(db, email: str, code: str, new_password: str) -> bool:
-    """Reset password using the emailed code."""
-    cache_key = _reset_code_cache_key(email)
+    """Reset web application login password using the emailed code.
+    
+    NOTE: This strictly resets the web application password (user.password).
+    It NEVER touches user.admin_password so that Django Admin login
+    credentials remain isolated and unaffected.
+    """
+    clean_email = (email or "").strip().lower()
+    cache_key = _reset_code_cache_key(clean_email)
     stored_digest = cache.get(cache_key)
     if not stored_digest:
         raise BadRequestError("Reset code is missing or expired. Please request a new one.")
@@ -193,7 +200,7 @@ def reset_password_with_code(db, email: str, code: str, new_password: str) -> bo
 
     with transaction.atomic():
         try:
-            user = User.objects.select_for_update().get(email=email)
+            user = User.objects.select_for_update().get(email__iexact=clean_email)
         except User.DoesNotExist:
             raise NotFoundError("User") from None
 
@@ -202,10 +209,13 @@ def reset_password_with_code(db, email: str, code: str, new_password: str) -> bo
         except DjangoValidationError as exc:
             raise BadRequestError(" ".join(exc.messages)) from exc
 
-        user.password = hash_password(new_password)
+        # Set ONLY web application login password
+        user.set_password(new_password)
+        if user.auth_provider == "google":
+            user.auth_provider = "local"
         user.auth_version += 1
-        user.save(update_fields=["password", "auth_version", "updated_at"])
+        user.save(update_fields=["password", "auth_provider", "auth_version", "updated_at"])
         RefreshToken.objects.filter(user=user, revoked=False).update(revoked=True)
     cache.delete(cache_key)
-    logger.info("Password reset successful for %s", email)
+    logger.info("Password reset successful for %s", clean_email)
     return True

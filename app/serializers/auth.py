@@ -54,7 +54,25 @@ class UpdateProfileRequestSerializer(serializers.Serializer):
 
 class UserResponseSerializer(serializers.ModelSerializer):
     company_name = serializers.CharField(read_only=True)
+    is_plan_expired = serializers.SerializerMethodField()
+    plan_days_left = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "email", "full_name", "phone", "company_name", "role", "plan", "plan_expires_at", "is_active", "is_platform_admin", "created_at"]
+        fields = [
+            "id", "email", "full_name", "phone", "company_name", "role",
+            "plan", "plan_expires_at", "is_plan_expired", "plan_days_left",
+            "is_active", "is_platform_admin", "created_at"
+        ]
+
+    def get_is_plan_expired(self, obj) -> bool:
+        return getattr(obj, "is_plan_expired", False)
+
+    def get_plan_days_left(self, obj):
+        if obj.plan in ("professional", "enterprise") and obj.plan_expires_at:
+            from django.utils import timezone
+            delta = obj.plan_expires_at - timezone.now()
+            if delta.total_seconds() <= 0:
+                return 0
+            return max(0, delta.days)
+        return None

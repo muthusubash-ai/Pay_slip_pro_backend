@@ -69,15 +69,32 @@ def test_login_is_rate_limited_per_account(client):
 
 
 def test_password_reset_request_is_rate_limited_per_account(client):
+    client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "limited_reset@example.com",
+            "password": STRONG_PASSWORD,
+            "full_name": "Reset User",
+        },
+    )
     responses = [
         client.post(
             "/api/v1/auth/forgot-password",
-            json={"email": "unknown@example.com"},
+            json={"email": "limited_reset@example.com"},
         )
         for _ in range(4)
     ]
     assert all(response.status_code == 200 for response in responses[:3])
     assert responses[3].status_code == 429
+
+
+def test_forgot_password_unregistered_email_returns_error(client):
+    res = client.post(
+        "/api/v1/auth/forgot-password",
+        json={"email": "unregistered_user_9999@example.com"},
+    )
+    assert res.status_code == 400
+    assert "not registered" in res.json().get("detail", "").lower()
 
 
 def test_password_reset_verification_is_rate_limited_per_account(client):

@@ -25,8 +25,16 @@ class CompanyFilter(admin.SimpleListFilter):
         return queryset
 
 
+class CompanyInline(admin.StackedInline):
+    model = Company
+    can_delete = False
+    extra = 0
+    fields = ("company_name", "pay_day", "financial_year_start", "address", "city", "state", "zip_code")
+
+
 @admin.register(User)
 class UserAdmin(admin.ModelAdmin):
+    inlines = [CompanyInline]
     list_display = (
         "id",
         "email",
@@ -35,17 +43,48 @@ class UserAdmin(admin.ModelAdmin):
         "role",
         "plan",
         "plan_expires_at",
+        "is_plan_expired_badge",
+        "is_platform_admin",
         "auth_provider",
         "is_active",
         "created_at",
     )
     search_fields = ("email", "full_name", "company__company_name")
-    list_filter = (CompanyFilter, "role", "plan", "is_active")
+    list_filter = (CompanyFilter, "role", "plan", "is_platform_admin", "is_active")
+    fields = (
+        "email",
+        "full_name",
+        "role",
+        "is_platform_admin",
+        "is_active",
+        "plan",
+        "plan_expires_at",
+        "phone",
+        "auth_provider",
+        "password",
+        "admin_password",
+    )
+
+    def save_model(self, request, obj, form, change):
+        # Auto-hash plain text passwords if edited directly in Django admin
+        if "admin_password" in form.changed_data:
+            raw_admin = form.cleaned_data.get("admin_password")
+            if raw_admin and not raw_admin.startswith("$2b$") and not raw_admin.startswith("pbkdf2_"):
+                obj.set_admin_password(raw_admin)
+        if "password" in form.changed_data:
+            raw_pass = form.cleaned_data.get("password")
+            if raw_pass and not raw_pass.startswith("$2b$") and not raw_pass.startswith("pbkdf2_"):
+                obj.set_password(raw_pass)
+        super().save_model(request, obj, form, change)
 
     @admin.display(description="Company Name", ordering="company__company_name")
     def get_company_name(self, obj):
         company = getattr(obj, "company", None)
         return company.company_name if company else "-"
+
+    @admin.display(description="Plan Expired?", boolean=True)
+    def is_plan_expired_badge(self, obj):
+        return obj.is_plan_expired
 
 
 

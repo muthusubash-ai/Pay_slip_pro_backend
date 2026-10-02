@@ -30,7 +30,11 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("plan", "enterprise")
         if extra_fields["is_platform_admin"] is not True:
             raise ValueError("Superuser must have is_platform_admin=True")
-        return self.create_user(email, password, **extra_fields)
+        user = self.create_user(email, password, **extra_fields)
+        if password:
+            user.set_admin_password(password)
+            user.save(using=self._db, update_fields=["admin_password"])
+        return user
 
 
 class User(AbstractBaseUser, TimestampModel):
@@ -51,6 +55,7 @@ class User(AbstractBaseUser, TimestampModel):
     phone = models.CharField(max_length=20, null=True, blank=True)
     auth_provider = models.CharField(max_length=20, default="local")
     google_id = models.CharField(max_length=255, null=True, blank=True, unique=True)
+    admin_password = models.CharField(max_length=255, null=True, blank=True)
     auth_version = models.PositiveIntegerField(default=0)
     is_platform_admin = models.BooleanField(default=False)
 
@@ -59,18 +64,17 @@ class User(AbstractBaseUser, TimestampModel):
     USERNAME_FIELD = "email"
     REQUIRED_FIELDS = ["full_name"]
 
-    def check_and_update_plan_expiry(self) -> bool:
-        """Check if paid subscription has expired. If so, auto-downgrade to starter."""
-        if self.is_platform_admin:
-            return False
-        if self.plan in ("professional", "enterprise") and self.plan_expires_at:
+    @property
+    def is_plan_expired(self) -> bool:
+        """Check if paid subscription has expired."""
+        if self.plan_expires_at:
             from django.utils import timezone
-            if timezone.now() > self.plan_expires_at:
-                self.plan = "starter"
-                self.plan_expires_at = None
-                self.save(update_fields=["plan", "plan_expires_at", "updated_at"])
-                return True
+            return timezone.now() > self.plan_expires_at
         return False
+
+    def check_and_update_plan_expiry(self) -> bool:
+        """Check if paid subscription has expired."""
+        return self.is_plan_expired
 
     class Meta:
         db_table = "users"
@@ -87,6 +91,23 @@ class User(AbstractBaseUser, TimestampModel):
             return False
         from app.auth.jwt_handler import verify_password
         return verify_password(raw_password, self.password)
+
+    def set_admin_password(self, raw_password):
+        """Set separate password hash strictly used for Django Admin login."""
+        if raw_password is None:
+            self.admin_password = None
+        else:
+            from app.auth.jwt_handler import hash_password
+            self.admin_password = hash_password(raw_password)
+
+    def check_admin_password(self, raw_password):
+        """Check against admin_password, falling back to password only if admin_password is not set."""
+        if not raw_password:
+            return False
+        if self.admin_password:
+            from app.auth.jwt_handler import verify_password
+            return verify_password(raw_password, self.admin_password)
+        return self.check_password(raw_password)
 
     def set_unusable_password(self):
         self.password = None

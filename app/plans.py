@@ -19,6 +19,8 @@ EMPLOYEE_LIMITS = {
 
 
 def get_user_plan(user) -> str:
+    if getattr(user, "is_plan_expired", False):
+        return PLAN_STARTER
     plan = getattr(user, "plan", PLAN_STARTER)
     return plan if plan in PLAN_LEVELS else PLAN_STARTER
 
