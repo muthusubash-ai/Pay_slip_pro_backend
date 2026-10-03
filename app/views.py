@@ -755,6 +755,7 @@ class AttendanceViews:
             serializer.validated_data.get("weekoff_dates"),
             serializer.validated_data.get("half_day_dates"),
             serializer.validated_data.get("permission_dates"),
+            serializer.validated_data.get("weekoff_halfday_dates"),
         )
         return Response({"count": len(records), "employee_id": serializer.validated_data["employee_id"]}, status=status.HTTP_201_CREATED)
 

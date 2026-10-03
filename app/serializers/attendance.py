@@ -16,14 +16,17 @@ class AttendanceBulkCreateSerializer(serializers.Serializer):
     weekoff_dates = serializers.ListField(child=serializers.DateField(), required=False, default=[])
     half_day_dates = serializers.ListField(child=serializers.DateField(), required=False, default=[])
     permission_dates = serializers.ListField(child=serializers.DateField(), required=False, default=[])
+    weekoff_halfday_dates = serializers.ListField(child=serializers.DateField(), required=False, default=[])
 
     def validate(self, attrs):
-        date_fields = ("leave_dates", "weekoff_dates", "half_day_dates", "permission_dates")
+        date_fields = ("leave_dates", "weekoff_dates", "half_day_dates", "permission_dates", "weekoff_halfday_dates")
         selected = [day for field in date_fields for day in attrs.get(field, [])]
         if any(day.month != attrs["month"] or day.year != attrs["year"] for day in selected):
             raise serializers.ValidationError("Attendance dates must be in the selected month and year.")
         if len(selected) != len(set(selected)):
             raise serializers.ValidationError("An attendance date can only have one status.")
+        if len(attrs.get("weekoff_halfday_dates", [])) > 2:
+            raise serializers.ValidationError("Maximum 2 Weekoff Halfdays allowed per month.")
         return attrs
 
 
@@ -42,6 +45,7 @@ class EmployeeLeavesSummarySerializer(serializers.Serializer):
     total_days = serializers.IntegerField()
     present_days = serializers.IntegerField()
     weekoff_days = serializers.IntegerField()
+    weekoff_halfday_days = serializers.IntegerField(required=False, default=0)
     leave_days = serializers.IntegerField()
     half_day_days = serializers.IntegerField(required=False, default=0)
     permission_days = serializers.IntegerField(required=False, default=0)
@@ -49,3 +53,5 @@ class EmployeeLeavesSummarySerializer(serializers.Serializer):
     leave_deduction = serializers.FloatField()
     gross_salary = serializers.FloatField(required=False, default=0.0)
     net_payable = serializers.FloatField(required=False, default=0.0)
+    is_joining_month = serializers.BooleanField(required=False, default=False)
+    date_of_joining = serializers.CharField(required=False, allow_null=True, default=None)

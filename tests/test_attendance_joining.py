@@ -97,3 +97,70 @@ def test_joining_month_only_counts_days_from_joining_date(client, auth_headers):
         headers=auth_headers,
     )
     assert slip.status_code == 201
+
+
+def test_weekoff_halfday_limit_and_no_deduction(client, auth_headers):
+    emp_res = client.post(
+        "/api/v1/employees/",
+        json={
+            "employee_code": "WK-HALF-01",
+            "full_name": "Weekoff Half Tester",
+            "email": "wkhalf@example.com",
+            "date_of_joining": "2026-09-01",
+            "basic_salary": 30000,
+        },
+        headers=auth_headers,
+    )
+    assert emp_res.status_code == 201
+    employee_id = emp_res.json()["id"]
+
+    # 1. Attempting 3 weekoff halfdays must fail with 400 validation error
+    fail_res = client.post(
+        "/api/v1/attendance/bulk",
+        json={
+            "employee_id": employee_id,
+            "month": 9,
+            "year": 2026,
+            "leave_dates": [],
+            "weekoff_dates": [],
+            "weekoff_halfday_dates": ["2026-09-05", "2026-09-12", "2026-09-19"],
+        },
+        headers=auth_headers,
+    )
+    assert fail_res.status_code == 400
+    assert "maximum 2 weekoff halfdays" in fail_res.text.lower()
+
+    # 2. Saving 2 weekoff halfdays must succeed
+    save_res = client.post(
+        "/api/v1/attendance/bulk",
+        json={
+            "employee_id": employee_id,
+            "month": 9,
+            "year": 2026,
+            "leave_dates": [],
+            "weekoff_dates": [],
+            "weekoff_halfday_dates": ["2026-09-05", "2026-09-12"],
+        },
+        headers=auth_headers,
+    )
+    assert save_res.status_code == 201
+    assert save_res.json()["count"] == 30
+
+    # 3. Check leave summary: weekoff_halfday_days is 2, leave_deduction is 0.0
+    summary_res = client.get("/api/v1/attendance/leave-summary?month=9&year=2026", headers=auth_headers)
+    assert summary_res.status_code == 200
+    emp_summary = [s for s in summary_res.json() if s["employee_id"] == employee_id][0]
+    assert emp_summary["weekoff_halfday_days"] == 2
+    assert emp_summary["leave_days"] == 0
+    assert emp_summary["leave_deduction"] == 0.0
+    assert emp_summary["present_days"] == 28
+
+    # 4. Generate slip: leave_deduction must be 0.0
+    slip_res = client.post(
+        f"/api/v1/salary-slips/generate/{employee_id}",
+        json={"month": 9, "year": 2026},
+        headers=auth_headers,
+    )
+    assert slip_res.status_code == 201
+    assert float(slip_res.json()["leave_deduction"]) == 0.0
+

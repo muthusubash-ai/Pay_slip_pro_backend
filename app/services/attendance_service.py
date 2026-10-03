@@ -54,12 +54,16 @@ def bulk_mark_leaves(
     weekoff_dates: list[date] | None = None,
     half_day_dates: list[date] | None = None,
     permission_dates: list[date] | None = None,
+    weekoff_halfday_dates: list[date] | None = None,
 ) -> list[Attendance]:
-    """Mark leave, half-day, permission and weekoff dates for an employee in a given month."""
+    """Mark leave, half-day, permission, weekoff and weekoff-halfday dates for an employee in a given month."""
     try:
         employee = Employee.objects.get(id=employee_id, user=user)
     except Employee.DoesNotExist:
         raise NotFoundError("Employee")
+
+    if len(weekoff_halfday_dates or []) > 2:
+        raise BadRequestError("Maximum 2 Weekoff Halfdays allowed per month.")
 
     total_days = calendar.monthrange(year, month)[1]
     start_date = date(year, month, 1)
@@ -69,7 +73,13 @@ def bulk_mark_leaves(
             f"Attendance cannot be saved before {employee.full_name}'s joining date ({employee.date_of_joining})."
         )
     first_active_date = max(start_date, employee.date_of_joining)
-    selected_dates = set(leave_dates) | set(weekoff_dates or []) | set(half_day_dates or []) | set(permission_dates or [])
+    selected_dates = (
+        set(leave_dates)
+        | set(weekoff_dates or [])
+        | set(half_day_dates or [])
+        | set(permission_dates or [])
+        | set(weekoff_halfday_dates or [])
+    )
     if any(day < first_active_date or day > end_date for day in selected_dates):
         raise BadRequestError("Attendance dates must be on or after the employee's joining date in the selected month.")
 
@@ -84,6 +94,7 @@ def bulk_mark_leaves(
         weekoff_set = set(weekoff_dates or [])
         half_day_set = set(half_day_dates or [])
         permission_set = set(permission_dates or [])
+        weekoff_halfday_set = set(weekoff_halfday_dates or [])
 
         records = []
         for day in range(first_active_date.day, total_days + 1):
@@ -94,6 +105,8 @@ def bulk_mark_leaves(
                 status = AttendanceStatus.half_day
             elif d in permission_set:
                 status = AttendanceStatus.permission
+            elif d in weekoff_halfday_set:
+                status = AttendanceStatus.weekoff_halfday
             elif d in weekoff_set:
                 status = AttendanceStatus.weekoff
             else:
@@ -112,6 +125,7 @@ def bulk_mark_leaves(
         # Full day leave = 1.0 day
         # Half day leave = 0.5 day
         # Permission = 0.25 day
+        # Weekoff Halfday = 0.0 deduction (part of monthly weekoff)
         effective_leave_days = (
             len(leave_set) * 1.0 +
             len(half_day_set) * 0.5 +
@@ -278,6 +292,23 @@ def get_weekoff_count(
     ).count()
 
 
+def get_weekoff_halfday_count(
+    db, user: User, employee_id: int, month: int, year: int
+) -> int:
+    """Count weekoff half days for an employee in a given month."""
+    total_days = calendar.monthrange(year, month)[1]
+    start_date = date(year, month, 1)
+    end_date = date(year, month, total_days)
+
+    return Attendance.objects.filter(
+        employee_id=employee_id,
+        user=user,
+        date__range=(start_date, end_date),
+        date__gte=F("employee__date_of_joining"),
+        status=AttendanceStatus.weekoff_halfday
+    ).count()
+
+
 def calculate_leave_deduction(basic_salary: float, effective_leave_days: float, month: int, year: int) -> float:
     """Calculate salary deduction based on effective leave days (1.0 for full leave, 0.5 for half day, 0.25 for permission)."""
     total_days = calendar.monthrange(year, month)[1]
@@ -307,6 +338,7 @@ def get_all_employees_leave_summary(
         half_day_days = get_half_day_count(None, user, emp.id, month, year)
         permission_days = get_permission_count(None, user, emp.id, month, year)
         weekoff_days = get_weekoff_count(None, user, emp.id, month, year)
+        weekoff_halfday_days = get_weekoff_halfday_count(None, user, emp.id, month, year)
 
         effective_leave_days = (
             leave_days * 1.0 +
@@ -345,8 +377,9 @@ def get_all_employees_leave_summary(
             "month": month,
             "year": year,
             "total_days": active_days,
-            "present_days": active_days - leave_days - half_day_days - permission_days - weekoff_days,
+            "present_days": active_days - leave_days - half_day_days - permission_days - weekoff_days - weekoff_halfday_days,
             "weekoff_days": weekoff_days,
+            "weekoff_halfday_days": weekoff_halfday_days,
             "leave_days": leave_days,
             "half_day_days": half_day_days,
             "permission_days": permission_days,
