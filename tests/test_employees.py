@@ -63,11 +63,47 @@ def test_update_employee(client, auth_headers, sample_employee):
     assert response.json()["full_name"] == "Jane Doe"
 
 
+def test_create_employee_with_optional_shift_timing(client, auth_headers, sample_employee):
+    payload = {**sample_employee, "shift_start_time": "09:30", "shift_end_time": "17:00"}
+    response = client.post("/api/v1/employees/", json=payload, headers=auth_headers)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["shift_start_time"] == "09:30"
+    assert data["shift_end_time"] == "17:00"
+
+
+def test_create_employee_without_shift_timing_leaves_it_unset(client, auth_headers, sample_employee):
+    response = client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["shift_start_time"] is None
+    assert data["shift_end_time"] is None
+
+
+def test_create_employee_rejects_invalid_shift_time_format(client, auth_headers, sample_employee):
+    payload = {**sample_employee, "shift_start_time": "9:30 AM"}
+    response = client.post("/api/v1/employees/", json=payload, headers=auth_headers)
+    assert response.status_code == 400
+
+
+def test_update_employee_shift_timing(client, auth_headers, sample_employee):
+    create_res = client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers)
+    emp_id = create_res.json()["id"]
+    response = client.put(
+        f"/api/v1/employees/{emp_id}",
+        json={"shift_start_time": "10:00", "shift_end_time": "17:30"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 200
+    assert response.json()["shift_start_time"] == "10:00"
+    assert response.json()["shift_end_time"] == "17:30"
+
+
 def test_edit_joining_date_updates_attendance_eligibility(client, auth_headers, sample_employee):
     employee_id = client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers).json()["id"]
     saved = client.post(
         "/api/v1/attendance/bulk",
-        json={"employee_id": employee_id, "month": 1, "year": 2026, "leave_dates": [], "weekoff_dates": []},
+        json={"employee_id": employee_id, "month": 1, "year": 2026, "leave_dates": []},
         headers=auth_headers,
     )
     assert saved.status_code == 201
@@ -94,7 +130,7 @@ def test_joining_date_change_with_affected_slip_is_rejected(client, auth_headers
     employee_id = client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers).json()["id"]
     client.post(
         "/api/v1/attendance/bulk",
-        json={"employee_id": employee_id, "month": 1, "year": 2026, "leave_dates": [], "weekoff_dates": []},
+        json={"employee_id": employee_id, "month": 1, "year": 2026, "leave_dates": []},
         headers=auth_headers,
     )
     slip = client.post(

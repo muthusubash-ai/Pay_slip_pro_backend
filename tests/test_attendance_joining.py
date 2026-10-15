@@ -38,7 +38,7 @@ def test_attendance_before_joining_is_hidden_and_cannot_be_saved(client, auth_he
     assert single.status_code == 400
     bulk = client.post(
         "/api/v1/attendance/bulk",
-        json={"employee_id": employee_id, "month": 8, "year": 2026, "leave_dates": [], "weekoff_dates": []},
+        json={"employee_id": employee_id, "month": 8, "year": 2026, "leave_dates": []},
         headers=auth_headers,
     )
     assert bulk.status_code == 400
@@ -62,7 +62,7 @@ def test_joining_month_only_counts_days_from_joining_date(client, auth_headers):
         "/api/v1/attendance/bulk",
         json={
             "employee_id": employee_id, "month": 9, "year": 2026,
-            "leave_dates": ["2026-09-14"], "weekoff_dates": [],
+            "leave_dates": ["2026-09-14"],
         },
         headers=auth_headers,
     )
@@ -72,7 +72,7 @@ def test_joining_month_only_counts_days_from_joining_date(client, auth_headers):
         "/api/v1/attendance/bulk",
         json={
             "employee_id": employee_id, "month": 9, "year": 2026,
-            "leave_dates": ["2026-09-16"], "weekoff_dates": [],
+            "leave_dates": ["2026-09-16"],
         },
         headers=auth_headers,
     )
@@ -90,7 +90,10 @@ def test_joining_month_only_counts_days_from_joining_date(client, auth_headers):
     summary = client.get("/api/v1/attendance/leave-summary?month=9&year=2026", headers=auth_headers).json()[0]
     assert summary["total_days"] == 16
     assert summary["present_days"] == 15
-    assert summary["leave_days"] == 1
+    # The employee's first leave of the month is automatically the free monthly Weekoff.
+    assert summary["weekoff_days"] == 1
+    assert summary["leave_days"] == 0
+    assert summary["leave_deduction"] == 0.0
     slip = client.post(
         f"/api/v1/salary-slips/generate/{employee_id}",
         json={"month": 9, "year": 2026},
@@ -114,23 +117,7 @@ def test_weekoff_halfday_limit_and_no_deduction(client, auth_headers):
     assert emp_res.status_code == 201
     employee_id = emp_res.json()["id"]
 
-    # 1. Attempting 3 weekoff halfdays must fail with 400 validation error
-    fail_res = client.post(
-        "/api/v1/attendance/bulk",
-        json={
-            "employee_id": employee_id,
-            "month": 9,
-            "year": 2026,
-            "leave_dates": [],
-            "weekoff_dates": [],
-            "weekoff_halfday_dates": ["2026-09-05", "2026-09-12", "2026-09-19"],
-        },
-        headers=auth_headers,
-    )
-    assert fail_res.status_code == 400
-    assert "maximum 2 weekoff halfdays" in fail_res.text.lower()
-
-    # 2. Saving 2 weekoff halfdays must succeed
+    # 1. Marking exactly 2 half-day leaves: both auto-map to the free Weekoff Half quota (2/month).
     save_res = client.post(
         "/api/v1/attendance/bulk",
         json={
@@ -138,24 +125,23 @@ def test_weekoff_halfday_limit_and_no_deduction(client, auth_headers):
             "month": 9,
             "year": 2026,
             "leave_dates": [],
-            "weekoff_dates": [],
-            "weekoff_halfday_dates": ["2026-09-05", "2026-09-12"],
+            "half_day_dates": ["2026-09-05", "2026-09-12"],
         },
         headers=auth_headers,
     )
     assert save_res.status_code == 201
     assert save_res.json()["count"] == 30
 
-    # 3. Check leave summary: weekoff_halfday_days is 2, leave_deduction is 0.0
+    # 2. Check leave summary: weekoff_halfday_days is 2, no half-day deduction.
     summary_res = client.get("/api/v1/attendance/leave-summary?month=9&year=2026", headers=auth_headers)
     assert summary_res.status_code == 200
     emp_summary = [s for s in summary_res.json() if s["employee_id"] == employee_id][0]
     assert emp_summary["weekoff_halfday_days"] == 2
-    assert emp_summary["leave_days"] == 0
+    assert emp_summary["half_day_days"] == 0
     assert emp_summary["leave_deduction"] == 0.0
     assert emp_summary["present_days"] == 28
 
-    # 4. Generate slip: leave_deduction must be 0.0
+    # 3. Generate slip: leave_deduction must be 0.0
     slip_res = client.post(
         f"/api/v1/salary-slips/generate/{employee_id}",
         json={"month": 9, "year": 2026},
@@ -163,4 +149,25 @@ def test_weekoff_halfday_limit_and_no_deduction(client, auth_headers):
     )
     assert slip_res.status_code == 201
     assert float(slip_res.json()["leave_deduction"]) == 0.0
+
+    # 4. A 3rd half-day leave in the SAME month exceeds the free quota -> deducts 0.5 day.
+    # (30000 / 30) * 0.5 = 500.0. The leave-summary endpoint recomputes the deduction live
+    # from current attendance, independent of the already-generated slip above.
+    save_res2 = client.post(
+        "/api/v1/attendance/bulk",
+        json={
+            "employee_id": employee_id,
+            "month": 9,
+            "year": 2026,
+            "leave_dates": [],
+            "half_day_dates": ["2026-09-05", "2026-09-12", "2026-09-19"],
+        },
+        headers=auth_headers,
+    )
+    assert save_res2.status_code == 201
+    summary_res2 = client.get("/api/v1/attendance/leave-summary?month=9&year=2026", headers=auth_headers)
+    emp_summary2 = [s for s in summary_res2.json() if s["employee_id"] == employee_id][0]
+    assert emp_summary2["weekoff_halfday_days"] == 2
+    assert emp_summary2["half_day_days"] == 1
+    assert emp_summary2["leave_deduction"] == 500.0
 

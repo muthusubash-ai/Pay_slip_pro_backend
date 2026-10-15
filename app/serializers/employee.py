@@ -20,6 +20,11 @@ def _validate_employee_fields(data: dict):
         val = str(data["bank_account_number"]).strip()
         if not re.match(r"^\d{6,20}$", val):
             raise serializers.ValidationError({"bank_account_number": "Bank account number must contain only 6-20 digits."})
+    for field in ("shift_start_time", "shift_end_time"):
+        if field in data and data[field]:
+            val = str(data[field]).strip()
+            if not re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d", val):
+                raise serializers.ValidationError({field: "Enter a valid 24-hour time in HH:MM format (e.g. 09:30)."})
 
 
 class EmployeeCreateSerializer(serializers.ModelSerializer):
@@ -46,6 +51,8 @@ class EmployeeCreateSerializer(serializers.ModelSerializer):
             "professional_tax",
             "tds",
             "esi",
+            "shift_start_time",
+            "shift_end_time",
         ]
 
     def validate(self, attrs):
@@ -76,6 +83,8 @@ class EmployeeUpdateSerializer(serializers.ModelSerializer):
             "professional_tax",
             "tds",
             "esi",
+            "shift_start_time",
+            "shift_end_time",
         ]
         extra_kwargs = {
             field: {"required": False, "allow_null": True}
@@ -113,6 +122,8 @@ class EmployeeResponseSerializer(serializers.ModelSerializer):
             "professional_tax",
             "tds",
             "esi",
+            "shift_start_time",
+            "shift_end_time",
             "is_active",
             "created_at",
             "updated_at",

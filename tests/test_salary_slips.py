@@ -25,7 +25,7 @@ def employee_with_slips(client, auth_headers):
 def save_attendance(client, auth_headers, employee_id, month, year):
     response = client.post(
         "/api/v1/attendance/bulk",
-        json={"employee_id": employee_id, "month": month, "year": year, "leave_dates": [], "weekoff_dates": []},
+        json={"employee_id": employee_id, "month": month, "year": year, "leave_dates": []},
         headers=auth_headers,
     )
     assert response.status_code == 201

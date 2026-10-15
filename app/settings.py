@@ -1,14 +1,15 @@
 import os
 from pathlib import Path
+
+import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
-import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load environment variables from backend/.env
-load_dotenv(BASE_DIR / ".env")
+# Load environment variables from backend/.env (override parent process env)
+load_dotenv(BASE_DIR / ".env", override=True)
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -18,16 +19,16 @@ def env_bool(name: str, default: bool = False) -> bool:
 def env_list(name: str, default: list[str] | None = None) -> list[str]:
     raw_value = os.getenv(name)
     if raw_value is None:
-        return default or []
+        return list(default or [])
     return [item.strip() for item in raw_value.split(",") if item.strip()]
 
 
 DEBUG = env_bool("DEBUG", False)
 SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
 
-if not DEBUG and len(SECRET_KEY) < 32:
+if not DEBUG and (len(SECRET_KEY) < 50 or len(set(SECRET_KEY)) < 5 or SECRET_KEY.startswith(('django-insecure-', 'change-me'))):
     raise ImproperlyConfigured(
-        "A unique SECRET_KEY of at least 32 characters is required when DEBUG=False."
+        "A random SECRET_KEY of at least 50 characters is required when DEBUG=False."
     )
 
 if DEBUG and not SECRET_KEY:
@@ -35,8 +36,10 @@ if DEBUG and not SECRET_KEY:
 
 ALLOWED_HOSTS = env_list(
     "ALLOWED_HOSTS",
-    ["localhost", "127.0.0.1"] if DEBUG else [],
+    ["localhost", "127.0.0.1", "testserver"] if DEBUG else [],
 )
+if DEBUG and "testserver" not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append("testserver")
 if not DEBUG and not ALLOWED_HOSTS:
     raise ImproperlyConfigured("ALLOWED_HOSTS must be configured when DEBUG=False.")
 if not DEBUG and "*" in ALLOWED_HOSTS:
@@ -48,13 +51,20 @@ DEFAULT_PRODUCTION_ORIGINS = [
     "https://payslippro.sbs",
     "https://www.payslippro.sbs",
     "https://api.payslippro.sbs",
-    "http://localhost:3000",
-    "http://localhost:8000",
-    "http://127.0.0.1:3000",
-    "http://127.0.0.1:8000",
+]
+DEV_PORT_RANGE = list(range(3000, 3060)) + list(range(5173, 5180)) + [8000, 8080]
+DEFAULT_DEVELOPMENT_ORIGINS = DEFAULT_PRODUCTION_ORIGINS + [
+    f"http://{host}:{port}"
+    for port in DEV_PORT_RANGE
+    for host in ("localhost", "127.0.0.1")
 ]
 
-CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", DEFAULT_PRODUCTION_ORIGINS)
+DEFAULT_ORIGINS = DEFAULT_DEVELOPMENT_ORIGINS if DEBUG else DEFAULT_PRODUCTION_ORIGINS
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", DEFAULT_ORIGINS)
+if DEBUG:
+    for dev_origin in DEFAULT_DEVELOPMENT_ORIGINS:
+        if dev_origin not in CSRF_TRUSTED_ORIGINS:
+            CSRF_TRUSTED_ORIGINS.append(dev_origin)
 
 # Application definition
 INSTALLED_APPS = [
@@ -67,6 +77,7 @@ INSTALLED_APPS = [
     "corsheaders",
     "rest_framework",
     "app",  # Our app containing views, models, serializers
+    "attendance",
 ]
 
 MIDDLEWARE = [
@@ -141,7 +152,11 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # CORS configuration
 CORS_ALLOW_ALL_ORIGINS = False
-CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", DEFAULT_PRODUCTION_ORIGINS)
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", DEFAULT_ORIGINS)
+if DEBUG:
+    for dev_origin in DEFAULT_DEVELOPMENT_ORIGINS:
+        if dev_origin not in CORS_ALLOWED_ORIGINS:
+            CORS_ALLOWED_ORIGINS.append(dev_origin)
 CORS_ALLOW_CREDENTIALS = True
 CORS_EXPOSE_HEADERS = ["Content-Disposition", "X-Filename"]
 
@@ -207,6 +222,7 @@ REST_FRAMEWORK = {
         "email_slip": os.getenv("EMAIL_SLIP_RATE", "60/hour"),
         "ifsc_lookup": os.getenv("IFSC_LOOKUP_RATE", "120/hour"),
         "location_lookup": os.getenv("LOCATION_LOOKUP_RATE", "120/hour"),
+        "ai_assistant": os.getenv("AI_ASSISTANT_RATE", "30/hour"),
     },
 }
 
@@ -218,11 +234,11 @@ MAX_LOGO_PIXELS = int(os.getenv("MAX_LOGO_PIXELS", 16000000))
 
 # SMTP Email Configurations
 EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
-EMAIL_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+EMAIL_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com").strip()
 EMAIL_PORT = int(os.getenv("SMTP_PORT", 587))
 EMAIL_USE_TLS = True
-EMAIL_HOST_USER = os.getenv("SMTP_USER", "")
-EMAIL_HOST_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+EMAIL_HOST_USER = os.getenv("SMTP_USER", "").strip()
+EMAIL_HOST_PASSWORD = os.getenv("SMTP_PASSWORD", "").replace(" ", "").strip()
 
 SMTP_HOST = EMAIL_HOST
 SMTP_PORT = EMAIL_PORT
@@ -255,3 +271,129 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
 # Razorpay Payment Gateway Configurations
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID", "")
 RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "")
+
+# AI Assistant (Google Gemini / OpenAI / Hermes / Local Agent) Configuration
+AI_BASE_URL = os.getenv("AI_BASE_URL", os.getenv("HERMES_URL", "")).strip()
+AI_API_KEY = os.getenv("AI_API_KEY", os.getenv("HERMES_API_KEY", "")).strip()
+AI_MODEL = os.getenv("AI_MODEL", os.getenv("HERMES_MODEL", "gpt-4o")).strip()
+
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", os.getenv("OPENAI_API_KEY", AI_API_KEY))
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", GEMINI_API_KEY)
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", GEMINI_MODEL)
+
+# CORS Configuration
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = env_list("CORS_ALLOWED_ORIGINS", DEFAULT_ORIGINS)
+if not DEBUG:
+    from urllib.parse import urlparse
+    production_origins = CORS_ALLOWED_ORIGINS + CSRF_TRUSTED_ORIGINS + [FRONTEND_URL]
+    if GOOGLE_CLIENT_ID:
+        production_origins.append(GOOGLE_REDIRECT_URI)
+    for origin in production_origins:
+        parsed_origin = urlparse(origin)
+        if parsed_origin.scheme != 'https' or parsed_origin.hostname in (None, 'localhost', '127.0.0.1') or '*' in origin:
+            raise ImproperlyConfigured('Production browser origins, FRONTEND_URL and configured Google redirect URI must use explicit HTTPS URLs.')
+
+# Application-level image validation also applies to multipart photos.
+DATA_UPLOAD_MAX_MEMORY_SIZE = 6 * 1024 * 1024
+from corsheaders.defaults import default_headers
+
+CORS_ALLOW_HEADERS = list(default_headers) + ['x-attendance-invite']
+
+# Media Files Configuration
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+
+# Sentry Error Monitoring (Optional: activates when SENTRY_DSN is configured)
+SENTRY_DSN = os.getenv("SENTRY_DSN", "").strip()
+if SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.django import DjangoIntegration
+
+        sentry_sdk.init(
+            dsn=SENTRY_DSN,
+            integrations=[DjangoIntegration()],
+            traces_sample_rate=float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1")),
+            send_default_pii=False,
+            environment=os.getenv("ENVIRONMENT", "production" if not DEBUG else "development"),
+        )
+    except Exception as e:
+        # Prevent app crash if sentry config fails
+        print(f"[Warning] Sentry initialization skipped: {e}")
+
+# Production-grade Rotating File & Console Logging
+LOGS_DIR = BASE_DIR / "logs"
+try:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[{asctime}] {levelname} [{name}:{lineno}] {message}",
+            "style": "{",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+        "simple": {
+            "format": "{levelname}: {message}",
+            "style": "{",
+        },
+    },
+    "handlers": {
+        "console": {
+            "level": "INFO",
+            "class": "logging.StreamHandler",
+            "formatter": "simple",
+        },
+        "file": {
+            "level": "INFO",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(LOGS_DIR / "django.log"),
+            "maxBytes": 5 * 1024 * 1024,  # 5 MB
+            "backupCount": 5,
+            "formatter": "verbose",
+            "encoding": "utf-8",
+        },
+        "error_file": {
+            "level": "ERROR",
+            "class": "logging.handlers.RotatingFileHandler",
+            "filename": str(LOGS_DIR / "django_error.log"),
+            "maxBytes": 5 * 1024 * 1024,  # 5 MB
+            "backupCount": 5,
+            "formatter": "verbose",
+            "encoding": "utf-8",
+        },
+    },
+    "loggers": {
+        "django": {
+            "handlers": ["console", "file"],
+            "level": "INFO",
+            "propagate": True,
+        },
+        "django.request": {
+            "handlers": ["console", "error_file"],
+            "level": "ERROR",
+            "propagate": False,
+        },
+        "django.security": {
+            "handlers": ["console", "error_file"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "app": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "attendance": {
+            "handlers": ["console", "file", "error_file"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}

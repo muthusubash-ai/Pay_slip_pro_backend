@@ -46,8 +46,17 @@ def create_employee(db, user: User, data) -> Employee:
         data = data.model_dump()
         
     employee_code = data.get("employee_code")
-    if Employee.objects.filter(user=user, employee_code=employee_code).exists():
-        raise ConflictError(f"Employee code '{employee_code}' already exists")
+    existing = Employee.objects.filter(user=user, employee_code=employee_code).first()
+    if existing:
+        if existing.is_active:
+            raise ConflictError(f"Employee code '{employee_code}' already exists")
+        # Reactivate existing inactive employee with updated data
+        for key, value in data.items():
+            setattr(existing, key, value)
+        existing.is_active = True
+        existing.save()
+        logger.info("Employee reactivated: %s", employee_code)
+        return existing
         
     employee = Employee(user=user, **data)
     employee.save()
@@ -95,10 +104,29 @@ def update_employee(
         return employee
 
 
-def delete_employee(db, user: User, employee_id: int) -> Employee:
-    """Permanently delete employee and their salary slips from the database."""
+def delete_employee(db, user: User, employee_id: int):
+    """Deactivate employee by setting is_active=False without deleting historical salary slips or attendance data."""
     employee = get_employee(db, user, employee_id)
+    emp_code = employee.employee_code
+    emp_name = employee.full_name
+    emp_email = employee.email
+
     employee.is_active = False
-    employee.delete()
-    logger.info("Permanently deleted employee: %s", employee.employee_code)
-    return employee
+    employee.save(update_fields=["is_active", "updated_at"])
+
+    # Also deactivate associated attendance module record without deleting past attendance data
+    try:
+        from attendance.models import Employee as AttendanceEmployee
+        AttendanceEmployee.objects.filter(payroll_employee=employee).update(is_active=False)
+        logger.info("Deactivated attendance module record for: %s", emp_code)
+    except Exception as ex:
+        logger.warning("Could not deactivate attendance records: %s", ex)
+
+    logger.info("Deactivated employee: %s (%s)", emp_name, emp_code)
+    return {
+        "id": employee_id,
+        "employee_code": emp_code,
+        "full_name": emp_name,
+        "email": emp_email,
+        "is_active": False,
+    }

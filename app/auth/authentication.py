@@ -1,6 +1,5 @@
 from django.conf import settings
-from django.middleware.csrf import CsrfViewMiddleware
-from rest_framework.authentication import BaseAuthentication
+from rest_framework.authentication import BaseAuthentication, CSRFCheck
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from rest_framework.permissions import BasePermission
 
@@ -49,9 +48,16 @@ class JWTAuthentication(BaseAuthentication):
 
     @staticmethod
     def _enforce_csrf(request):
-        check = CsrfViewMiddleware(lambda req: None)
-        check.process_request(request)
-        reason = check.process_view(request, None, (), {})
+        raw_req = getattr(request, "_request", request)
+        if getattr(request, "_dont_enforce_csrf_checks", False) or getattr(raw_req, "_dont_enforce_csrf_checks", False):
+            return
+
+        def dummy_get_response(req):
+            return None
+
+        check = CSRFCheck(dummy_get_response)
+        check.process_request(raw_req)
+        reason = check.process_view(raw_req, None, (), {})
         if reason:
             raise PermissionDenied(f"CSRF validation failed: {reason}")
 

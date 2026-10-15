@@ -119,27 +119,35 @@ def lookup_indian_pin(code: str) -> dict | None:
     if cached is not None:
         return cached
 
-    response = httpx.get(f"https://api.zippopotam.us/IN/{pin}", timeout=5.0)
-    if response.status_code == 404:
-        return None
+    response = httpx.get(f"https://api.postalpincode.in/pincode/{pin}", timeout=5.0)
     response.raise_for_status()
     payload = response.json()
-    if not isinstance(payload, dict) or not isinstance(payload.get("places"), list):
+    if not isinstance(payload, list) or not payload or not isinstance(payload[0], dict):
         raise TypeError("PIN lookup returned invalid data.")
 
+    entry = payload[0]
+    if str(entry.get("Status") or "") != "Success" or not isinstance(entry.get("PostOffice"), list):
+        return None
+
+    # Use the postal District (e.g. "Chennai") as the area, not the individual post
+    # office name (e.g. "Flower Bazaar", "MPT AO") - the district is what people
+    # actually recognize and expect as the city for a given PIN code.
     places = []
     seen = set()
-    for place in payload["places"]:
-        if not isinstance(place, dict):
+    for office in entry["PostOffice"]:
+        if not isinstance(office, dict):
             continue
-        area = str(place.get("place name") or "").strip()
-        state = str(place.get("state") or "").strip()
+        area = str(office.get("District") or "").strip()
+        state = str(office.get("State") or "").strip()
         if not area or not state or (area.casefold(), state.casefold()) in seen:
             continue
         seen.add((area.casefold(), state.casefold()))
         places.append({"area": area, "state": state})
         if len(places) == 12:
             break
+
+    if not places:
+        return None
 
     result = {"pin_code": pin, "places": places}
     cache.set(cache_key, result, timeout=24 * 60 * 60)

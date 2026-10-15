@@ -83,3 +83,7 @@ class IfscLookupRateThrottle(UserRateThrottle):
 
 class LocationLookupRateThrottle(UserRateThrottle):
     scope = "location_lookup"
+
+
+class AIAssistantRateThrottle(UserRateThrottle):
+    scope = "ai_assistant"

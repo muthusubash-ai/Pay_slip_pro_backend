@@ -10,6 +10,13 @@ def enable_db_access(db):
     cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def clean_ai_settings(monkeypatch):
+    """Ensure tests run against a predictable default AI config unless explicitly monkeypatched."""
+    monkeypatch.setattr(settings, "AI_BASE_URL", "")
+    monkeypatch.setattr(settings, "AI_API_KEY", "")
+
+
 class CompatibleAPIClient(APIClient):
     def post(self, path, data=None, format=None, content_type=None, follow=False, **extra):
         if "json" in extra:

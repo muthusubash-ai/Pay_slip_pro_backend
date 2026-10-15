@@ -71,15 +71,19 @@ def test_city_suggestions_filter_selected_state_and_cache(client, auth_headers, 
     assert ("countrycode", "IN") in get.call_args.kwargs["params"]
 
 
-def test_pin_lookup_returns_areas_and_caches(client, auth_headers, monkeypatch):
+def test_pin_lookup_returns_district_as_area_and_caches(client, auth_headers, monkeypatch):
+    """The area shown/selected is the postal District (e.g. "Chennai"), not the
+    individual post office name (e.g. "Flower Bazaar") - that's what makes it a
+    sensible value to auto-fill into the company's City field."""
     response = Mock(status_code=200)
-    response.json.return_value = {
-        "places": [
-            {"place name": "Chennai", "state": "Tamil Nadu"},
-            {"place name": "Chennai", "state": "Tamil Nadu"},
-            {"place name": "George Town", "state": "Tamil Nadu"},
-        ]
-    }
+    response.json.return_value = [{
+        "Status": "Success",
+        "PostOffice": [
+            {"Name": "Flower Bazaar", "District": "Chennai", "State": "Tamil Nadu"},
+            {"Name": "Mannady (Chennai)", "District": "Chennai", "State": "Tamil Nadu"},
+            {"Name": "New Delhi", "District": "New Delhi", "State": "Delhi"},
+        ],
+    }]
     response.raise_for_status.return_value = None
     get = Mock(return_value=response)
     monkeypatch.setattr("app.services.location_lookup.httpx.get", get)
@@ -90,14 +94,17 @@ def test_pin_lookup_returns_areas_and_caches(client, auth_headers, monkeypatch):
     assert first.status_code == 200
     assert first.json() == {"pin_code": "600001", "places": [
         {"area": "Chennai", "state": "Tamil Nadu"},
-        {"area": "George Town", "state": "Tamil Nadu"},
+        {"area": "New Delhi", "state": "Delhi"},
     ]}
     assert second.status_code == 200
-    get.assert_called_once_with("https://api.zippopotam.us/IN/600001", timeout=5.0)
+    get.assert_called_once_with("https://api.postalpincode.in/pincode/600001", timeout=5.0)
 
 
 def test_pin_lookup_handles_missing_and_provider_failure(client, auth_headers, monkeypatch):
-    monkeypatch.setattr("app.services.location_lookup.httpx.get", Mock(return_value=Mock(status_code=404)))
+    not_found = Mock(status_code=200)
+    not_found.raise_for_status.return_value = None
+    not_found.json.return_value = [{"Status": "Error", "PostOffice": None}]
+    monkeypatch.setattr("app.services.location_lookup.httpx.get", Mock(return_value=not_found))
     assert client.get(PIN_URL, {"code": "999999"}, headers=auth_headers).status_code == 404
 
     def timeout(*args, **kwargs):

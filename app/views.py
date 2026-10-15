@@ -102,6 +102,7 @@ from app.auth.throttles import (
     PasswordResetRequestIPRateThrottle,
     PasswordResetVerifyAccountRateThrottle,
     PasswordResetVerifyIPRateThrottle,
+    AIAssistantRateThrottle,
 )
 from app.exceptions import BadRequestError, ForbiddenError
 from app.models.employee import Employee
@@ -163,6 +164,8 @@ from app.services import (
 )
 from app.services.bank_lookup import lookup_ifsc
 from app.services.location_lookup import lookup_indian_pin, suggest_addresses, suggest_cities
+from app.services.ai_assistant_service import ask_assistant
+from app.serializers.ai_assistant import AIAssistantChatRequestSerializer, AIAssistantChatResponseSerializer
 from app.upload_validation import validate_logo_upload
 
 logger = logging.getLogger(__name__)
@@ -537,10 +540,35 @@ class EmployeeViews:
                     f"Your current plan supports up to {employee_limit} active employees. "
                     "Upgrade your plan to add more employees."
                 )
+            send_invitation = bool(request.data.get("send_invitation", False))
             serializer = EmployeeCreateSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
             employee = employee_service.create_employee(None, request.user, serializer.validated_data)
-            return Response(EmployeeResponseSerializer(employee).data, status=status.HTTP_201_CREATED)
+
+            email_sent = False
+            if send_invitation and employee.email:
+                try:
+                    from app.services.email_service import send_employee_registration_invitation_email
+                    origin = request.headers.get("Origin") or ""
+                    frontend_url = origin if (origin and ("localhost" in origin or "127.0.0.1" in origin)) else getattr(settings, 'FRONTEND_URL', 'http://localhost:3050')
+                    from attendance.security import issue_invite
+                    invitation_token = issue_invite(employee)
+                    portal_url = f"{frontend_url.rstrip('/')}/biometric"
+                    company_name = getattr(request.user, 'company_name', '') or getattr(request.user, 'company', '') or settings.APP_NAME
+                    email_sent = send_employee_registration_invitation_email(
+                        to_email=employee.email,
+                        employee_name=employee.full_name,
+                        employee_code=employee.employee_code,
+                        portal_url=portal_url,
+                        company_name=company_name,
+                        invitation_token=invitation_token,
+                    )
+                except Exception as ex:
+                    logger.warning("Failed to send onboarding email to %s: %s", employee.email, ex)
+
+            data = EmployeeResponseSerializer(employee).data
+            data["email_sent"] = email_sent
+            return Response(data, status=status.HTTP_201_CREATED)
 
     @staticmethod
     @api_view(["GET", "PUT", "DELETE"])
@@ -557,8 +585,47 @@ class EmployeeViews:
             )
             return Response(EmployeeResponseSerializer(employee).data)
         elif request.method == "DELETE":
-            employee = employee_service.delete_employee(None, request.user, employee_id)
-            return Response(EmployeeResponseSerializer(employee).data)
+            res = employee_service.delete_employee(None, request.user, employee_id)
+            return Response(
+                {
+                    "detail": f"Employee {res.get('full_name', '')} ({res.get('employee_code', '')}) has been deactivated and removed successfully.",
+                    "id": employee_id,
+                    "employee_code": res.get("employee_code"),
+                    "full_name": res.get("full_name"),
+                    "email": res.get("email"),
+                    "is_active": False,
+                },
+                status=status.HTTP_200_OK
+            )
+
+    @staticmethod
+    @api_view(["POST"])
+    @permission_classes([IsAuthenticated])
+    def send_invite(request, employee_id):
+        employee = employee_service.get_employee(None, request.user, employee_id)
+        if not employee.email:
+            return Response({"detail": "Employee has no email address configured."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from app.services.email_service import send_employee_registration_invitation_email
+        origin = request.headers.get("Origin") or ""
+        frontend_url = origin if (origin and ("localhost" in origin or "127.0.0.1" in origin)) else getattr(settings, 'FRONTEND_URL', 'http://localhost:3050')
+        from attendance.security import issue_invite
+        invitation_token = issue_invite(employee)
+        portal_url = f"{frontend_url.rstrip('/')}/biometric"
+        company_name = getattr(request.user, 'company_name', '') or getattr(request.user, 'company', '') or settings.APP_NAME
+
+        success = send_employee_registration_invitation_email(
+            to_email=employee.email,
+            employee_name=employee.full_name,
+            employee_code=employee.employee_code,
+            portal_url=portal_url,
+            company_name=company_name,
+            invitation_token=invitation_token,
+        )
+        if success:
+            return Response({"detail": f"Registration invitation email sent to {employee.email} successfully."})
+        else:
+            return Response({"detail": "Failed to send email. Please verify SMTP settings."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 # -------------------------------------------------------------
@@ -752,10 +819,8 @@ class AttendanceViews:
             serializer.validated_data["month"],
             serializer.validated_data["year"],
             serializer.validated_data["leave_dates"],
-            serializer.validated_data.get("weekoff_dates"),
             serializer.validated_data.get("half_day_dates"),
             serializer.validated_data.get("permission_dates"),
-            serializer.validated_data.get("weekoff_halfday_dates"),
         )
         return Response({"count": len(records), "employee_id": serializer.validated_data["employee_id"]}, status=status.HTTP_201_CREATED)
 
@@ -930,6 +995,23 @@ class PaymentViews:
             "current_plan": getattr(request.user, "plan", "starter"),
             "orders": PaymentOrderResponseSerializer(orders, many=True).data
         })
+
+
+class AIAssistantViews:
+    @staticmethod
+    @api_view(["POST"])
+    @permission_classes([IsAuthenticated])
+    @throttle_classes([AIAssistantRateThrottle])
+    def chat(request):
+        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "AI Assistant")
+        serializer = AIAssistantChatRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reply = ask_assistant(
+            request.user,
+            serializer.validated_data["message"],
+            history=serializer.validated_data.get("history", []),
+        )
+        return Response(AIAssistantChatResponseSerializer({"reply": reply}).data)
 
 
 @api_view(["GET"])

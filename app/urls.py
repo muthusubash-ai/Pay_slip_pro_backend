@@ -11,7 +11,9 @@ urlpatterns = [
     # Django Built-in Admin Panel
     path("admin/", admin.site.urls),
 
-    # Router endpoints
+    # Attendance Module Endpoints
+    path("api/attendance/", include("attendance.urls")),
+
     # Router endpoints
     path("api/v1/", include(router.urls)),
     path("api/v1/health", views.health_check, name="health_check"),
@@ -40,6 +42,9 @@ urlpatterns = [
     path("api/v1/locations/pin", views.pin_lookup, name="pin_lookup"),
     path("api/v1/employees/", views.EmployeeViews.employee_list_create, name="employee_list_create"),
     path("api/v1/employees/<int:employee_id>", views.EmployeeViews.employee_detail, name="employee_detail"),
+    path("api/v1/employees/<int:employee_id>/", views.EmployeeViews.employee_detail, name="employee_detail_slash"),
+    path("api/v1/employees/<int:employee_id>/send-invite", views.EmployeeViews.send_invite, name="employee_send_invite"),
+    path("api/v1/employees/<int:employee_id>/send-invite/", views.EmployeeViews.send_invite, name="employee_send_invite_slash"),
     
     # Custom Salary Slip Routes
     path("api/v1/salary-slips/", views.SalarySlipViews.salary_slip_list, name="salary_slip_list"),
@@ -71,6 +76,7 @@ urlpatterns = [
     path("api/v1/payments/create-order", views.PaymentViews.create_order, name="payment_create_order"),
     path("api/v1/payments/verify", views.PaymentViews.verify_payment, name="payment_verify"),
     path("api/v1/payments/history", views.PaymentViews.payment_history, name="payment_history"),
+    path("api/v1/ai-assistant/chat", views.AIAssistantViews.chat, name="ai_assistant_chat"),
 
     # Root Redirect
     path("", views.root_view, name="root_view"),

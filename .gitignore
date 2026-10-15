@@ -8,3 +8,6 @@ __pycache__/
 .pytest_cache/
 uploads/
 media/
+logs/
+*.log
+backups/

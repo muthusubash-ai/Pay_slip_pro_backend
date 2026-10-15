@@ -10,6 +10,7 @@ from app.services.attendance_service import (
     get_leave_count,
     get_half_day_count,
     get_permission_count,
+    get_permission_allowance,
     has_complete_attendance,
 )
 
@@ -49,7 +50,8 @@ def generate_slip_for_employee(
     leave_days = get_leave_count(None, user, employee.id, month, year)
     half_days = get_half_day_count(None, user, employee.id, month, year)
     permissions = get_permission_count(None, user, employee.id, month, year)
-    effective_leaves = float(leave_days) * 1.0 + float(half_days) * 0.5 + float(permissions) * 0.25
+    excess_permissions = max(0, permissions - get_permission_allowance(user))
+    effective_leaves = float(leave_days) * 1.0 + float(half_days) * 0.5 + float(excess_permissions) * 1.0
 
     leave_ded = calculate_leave_deduction(
         float(employee.basic_salary), effective_leaves, month, year

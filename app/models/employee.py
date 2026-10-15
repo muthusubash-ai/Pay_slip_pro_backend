@@ -32,6 +32,11 @@ class Employee(TimestampModel):
     tds = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     esi = models.DecimalField(max_digits=12, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
+    # Optional per-employee shift timing (24-hour "HH:MM"), only used when the
+    # company has enabled Company.enable_employee_shift_timing. When unset, the
+    # employee falls back to the company's default office_start_time/office_end_time.
+    shift_start_time = models.CharField(max_length=20, null=True, blank=True)
+    shift_end_time = models.CharField(max_length=20, null=True, blank=True)
 
     class Meta:
         db_table = "employees"

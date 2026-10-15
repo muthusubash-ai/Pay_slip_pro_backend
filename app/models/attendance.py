@@ -10,6 +10,10 @@ class AttendanceStatus:
     half_day = "half_day"
     permission = "permission"
     weekoff_halfday = "weekoff_halfday"
+    # Structural recurring weekly off day (e.g. every Sunday), configured per-company via
+    # Company.weekly_off_days. Distinct from `weekoff`, which is the flexible 1/month free
+    # leave allowance - `company_week_off` always wins and never consumes that allowance.
+    company_week_off = "company_week_off"
 
     CHOICES = [
         (present, "present"),
@@ -18,6 +22,7 @@ class AttendanceStatus:
         (half_day, "half_day"),
         (permission, "permission"),
         (weekoff_halfday, "weekoff_halfday"),
+        (company_week_off, "company_week_off"),
     ]
 
 

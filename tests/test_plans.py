@@ -34,6 +34,32 @@ def test_starter_gets_basic_dashboard_but_not_professional_features(client, auth
         "/api/v1/attendance/leave-summary?month=1&year=2026",
         headers=auth_headers,
     ).status_code == 403
+    assert client.post(
+        "/api/v1/ai-assistant/chat",
+        json={"message": "How is net pay calculated?"},
+        headers=auth_headers,
+    ).status_code == 403
+
+
+def test_professional_and_enterprise_can_use_ai_assistant_but_starter_cannot(client, auth_headers, monkeypatch):
+    # No API key configured -> ask_assistant resolves via its local fallback answer,
+    # so this test only exercises the plan gate, not the upstream AI provider.
+    monkeypatch.setattr("app.services.ai_assistant_service.settings.OPENAI_API_KEY", "")
+    monkeypatch.setattr("app.services.ai_assistant_service.settings.GEMINI_API_KEY", "")
+
+    set_plan("starter")
+    starter_response = client.post(
+        "/api/v1/ai-assistant/chat", json={"message": "Hello"}, headers=auth_headers,
+    )
+    assert starter_response.status_code == 403
+    assert "Professional" in starter_response.json()["detail"]
+
+    for plan in ("professional", "enterprise"):
+        set_plan(plan)
+        response = client.post(
+            "/api/v1/ai-assistant/chat", json={"message": "Hello"}, headers=auth_headers,
+        )
+        assert response.status_code == 200, f"{plan} plan should be able to use the AI assistant"
 
 
 def test_starter_can_save_monthly_attendance_and_then_generate_slip(client, auth_headers, sample_employee_payload):
@@ -50,7 +76,7 @@ def test_starter_can_save_monthly_attendance_and_then_generate_slip(client, auth
     ).status_code == 400
     saved = client.post(
         "/api/v1/attendance/bulk",
-        json={"employee_id": employee_id, "month": 9, "year": 2026, "leave_dates": [], "weekoff_dates": []},
+        json={"employee_id": employee_id, "month": 9, "year": 2026, "leave_dates": []},
         headers=auth_headers,
     )
     assert saved.status_code == 201

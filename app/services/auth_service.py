@@ -68,6 +68,7 @@ def authenticate_user(db, email: str, password: str) -> dict:
     if user.auth_provider == "google" and not user.password:
         raise UnauthorizedError("This account uses Google Sign-In. Please use the Google button to login.")
     
+    # Strict case-sensitive cryptographic password verification
     if not verify_password(password, user.password):
         raise UnauthorizedError("Invalid email or password")
         

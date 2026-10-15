@@ -2,8 +2,9 @@ import hashlib
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import jwt
 from django.conf import settings
-from jose import JWTError, jwt
+from jwt import PyJWTError
 from passlib.context import CryptContext
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -75,7 +76,7 @@ def decode_token(token: str) -> dict | None:
             audience=settings.JWT_AUDIENCE,
             issuer=settings.JWT_ISSUER,
         )
-    except JWTError:
+    except PyJWTError:
         return None
 
 
