@@ -142,7 +142,7 @@ def encode_photo(upload):
     try:
         import face_recognition
         import numpy as np
-    except ImportError as exc:
+    except (ImportError, SystemExit) as exc:
         raise BiometricUnavailable() from exc
     array = np.array(img)
     locations = face_recognition.face_locations(array, model='hog')
