@@ -13,6 +13,7 @@ urlpatterns = [
 
     # Attendance Module Endpoints
     path("api/attendance/", include("attendance.urls")),
+    path("api/v1/attendance/", include("attendance.urls")),
 
     # Router endpoints
     path("api/v1/", include(router.urls)),

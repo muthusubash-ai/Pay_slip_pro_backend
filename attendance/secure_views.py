@@ -542,8 +542,29 @@ class OwnerView(APIView):
 
 class LeaveActionView(OwnerView):
     def get(self, request):
-        rows = LeaveRequest.objects.select_related('employee').filter(employee__payroll_employee__user=request.user)
-        return Response({'leave_requests': [leave_data(x) for x in rows[:200]]})
+        if getattr(request.user, 'is_platform_admin', False) or getattr(request.user, 'is_superuser', False):
+            rows = list(LeaveRequest.objects.select_related('employee__payroll_employee').all().order_by('-created_at')[:200])
+        else:
+            user_company = getattr(request.user, 'company', None)
+            user_emp_codes = list(request.user.employees.values_list('employee_code', flat=True))
+            q = (
+                Q(employee__payroll_employee__user=request.user) |
+                Q(employee__payroll_employee__isnull=True, employee__emp_id__in=user_emp_codes)
+            )
+            if user_company:
+                q |= Q(employee__payroll_employee__user__company=user_company)
+            rows = list(LeaveRequest.objects.select_related('employee__payroll_employee').filter(q).order_by('-created_at')[:200])
+
+        # Auto-link unlinked attendance employee if matching payroll employee exists
+        for row in rows:
+            if row.employee and not row.employee.payroll_employee:
+                from app.models.employee import Employee as PayrollEmployee
+                pe = PayrollEmployee.objects.filter(user=request.user, employee_code__iexact=row.employee.emp_id).first()
+                if pe:
+                    row.employee.payroll_employee = pe
+                    row.employee.save(update_fields=['payroll_employee'])
+
+        return Response({'leave_requests': [leave_data(x) for x in rows]})
 
     def post(self, request):
         action = request.data.get('action')
@@ -554,9 +575,32 @@ class LeaveActionView(OwnerView):
         except (ValueError, TypeError) as exc:
             raise ValidationError('Select a valid leave request.') from exc
         with transaction.atomic():
-            leave = LeaveRequest.objects.select_for_update().filter(pk=request_id, employee__payroll_employee__user=request.user).first()
-            if not leave:
+            if getattr(request.user, 'is_platform_admin', False) or getattr(request.user, 'is_superuser', False):
+                leave_exists = LeaveRequest.objects.filter(pk=request_id).exists()
+            else:
+                user_company = getattr(request.user, 'company', None)
+                user_emp_codes = list(request.user.employees.values_list('employee_code', flat=True))
+                q = (
+                    Q(employee__payroll_employee__user=request.user) |
+                    Q(employee__payroll_employee__isnull=True, employee__emp_id__in=user_emp_codes)
+                )
+                if user_company:
+                    q |= Q(employee__payroll_employee__user__company=user_company)
+                leave_exists = LeaveRequest.objects.filter(q, pk=request_id).exists()
+
+            if not leave_exists:
                 raise PermissionDenied('Leave request is unavailable.')
+
+            leave = LeaveRequest.objects.select_for_update().filter(pk=request_id).first()
+
+            # Auto-link unlinked attendance employee if matching payroll employee exists
+            if leave.employee and not leave.employee.payroll_employee:
+                from app.models.employee import Employee as PayrollEmployee
+                pe = PayrollEmployee.objects.filter(employee_code__iexact=leave.employee.emp_id).first()
+                if pe:
+                    leave.employee.payroll_employee = pe
+                    leave.employee.save(update_fields=['payroll_employee'])
+
             if leave.status != 'PENDING':
                 raise ValidationError('This request has already been reviewed.')
             leave.status = action
