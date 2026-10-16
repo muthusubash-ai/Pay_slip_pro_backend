@@ -530,7 +530,8 @@ class EmployeeViews:
             per_page = int(request.GET.get("per_page", 20))
             search = request.GET.get("search")
             department = request.GET.get("department")
-            res = employee_service.list_employees(None, request.user, page, per_page, search, department)
+            sort_by = request.GET.get("sort") or request.GET.get("sort_by")
+            res = employee_service.list_employees(None, request.user, page, per_page, search, department, sort_by=sort_by)
             return Response(EmployeeListResponseSerializer(res).data)
         elif request.method == "POST":
             employee_limit = get_employee_limit(request.user)

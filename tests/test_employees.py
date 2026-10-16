@@ -47,6 +47,40 @@ def test_list_employees(client, auth_headers, sample_employee):
     assert len(data["items"]) == 1
 
 
+def test_list_employees_newest_first_and_alphabetical_sorting(client, auth_headers, sample_employee):
+    # Create employee 1: "Zachary Adams" (Z)
+    emp1 = sample_employee.copy()
+    emp1["employee_code"] = "EMP001"
+    emp1["full_name"] = "Zachary Adams"
+    emp1["email"] = "zachary@example.com"
+    client.post("/api/v1/employees/", json=emp1, headers=auth_headers)
+
+    # Create employee 2: "Alice Brown" (A) - newly saved
+    emp2 = sample_employee.copy()
+    emp2["employee_code"] = "EMP002"
+    emp2["full_name"] = "Alice Brown"
+    emp2["email"] = "alice@example.com"
+    client.post("/api/v1/employees/", json=emp2, headers=auth_headers)
+
+    # 1. Default: newest saved employee should show at the TOP
+    res_default = client.get("/api/v1/employees/", headers=auth_headers)
+    assert res_default.status_code == 200
+    names_default = [e["full_name"] for e in res_default.json()["items"]]
+    assert names_default == ["Alice Brown", "Zachary Adams"]
+
+    # 2. Alphabetical Ascending: A -> Z
+    res_asc = client.get("/api/v1/employees/?sort=name_asc", headers=auth_headers)
+    assert res_asc.status_code == 200
+    names_asc = [e["full_name"] for e in res_asc.json()["items"]]
+    assert names_asc == ["Alice Brown", "Zachary Adams"]
+
+    # 3. Alphabetical Descending: Z -> A
+    res_desc = client.get("/api/v1/employees/?sort=name_desc", headers=auth_headers)
+    assert res_desc.status_code == 200
+    names_desc = [e["full_name"] for e in res_desc.json()["items"]]
+    assert names_desc == ["Zachary Adams", "Alice Brown"]
+
+
 def test_get_employee(client, auth_headers, sample_employee):
     create_res = client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers)
     emp_id = create_res.json()["id"]

@@ -1,6 +1,7 @@
 import logging
 import math
 from django.db.models import Q
+from django.db.models.functions import Lower
 from django.db import transaction
 
 from app.exceptions import ConflictError, NotFoundError
@@ -18,6 +19,7 @@ def list_employees(
     per_page: int = 20,
     search: str | None = None,
     department: str | None = None,
+    sort_by: str | None = None,
 ) -> dict:
     query = Employee.objects.filter(user=user, is_active=True)
     if search:
@@ -28,6 +30,17 @@ def list_employees(
         )
     if department:
         query = query.filter(department=department)
+
+    # Alphabetical and newest sorting
+    if sort_by in ("name_asc", "alpha_asc", "az", "name"):
+        query = query.order_by(Lower("full_name").asc(), "-created_at", "-id")
+    elif sort_by in ("name_desc", "alpha_desc", "za"):
+        query = query.order_by(Lower("full_name").desc(), "-created_at", "-id")
+    elif sort_by in ("oldest", "date_asc"):
+        query = query.order_by("created_at", "id")
+    else:
+        # Default: newest employees first so newly saved employees appear at the top
+        query = query.order_by("-created_at", "-id")
         
     total = query.count()
     pages = math.ceil(total / per_page) if per_page > 0 else 0

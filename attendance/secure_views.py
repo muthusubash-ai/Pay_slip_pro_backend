@@ -495,10 +495,31 @@ class MonthlySummaryView(EmployeeView):
 
 
 def leave_data(leave):
-    return {'id': leave.id, 'emp_id': leave.employee.emp_id, 'employee_name': leave.employee.full_name,
-            'request_type': leave.request_type, 'start_date': str(leave.start_date), 'end_date': str(leave.end_date),
-            'duration_hours': leave.duration_hours, 'reason': leave.reason, 'status': leave.status,
-            'admin_remarks': leave.admin_remarks or '', 'created_at': leave.created_at.isoformat()}
+    payroll_emp = getattr(getattr(leave, 'employee', None), 'payroll_employee', None)
+    if not payroll_emp and getattr(leave, 'employee', None) and getattr(leave.employee, 'emp_id', None):
+        from app.models.employee import Employee as PayrollEmployee
+        payroll_emp = PayrollEmployee.objects.filter(employee_code__iexact=leave.employee.emp_id).first()
+        if payroll_emp:
+            try:
+                leave.employee.payroll_employee = payroll_emp
+                leave.employee.save(update_fields=['payroll_employee'])
+            except Exception:
+                pass
+
+    return {
+        'id': leave.id,
+        'emp_id': leave.employee.emp_id if leave.employee else '',
+        'employee_name': leave.employee.full_name if leave.employee else '',
+        'employee_id': payroll_emp.id if payroll_emp else None,
+        'request_type': leave.request_type,
+        'start_date': str(leave.start_date),
+        'end_date': str(leave.end_date),
+        'duration_hours': leave.duration_hours,
+        'reason': leave.reason,
+        'status': leave.status,
+        'admin_remarks': leave.admin_remarks or '',
+        'created_at': leave.created_at.isoformat() if leave.created_at else '',
+    }
 
 
 class SubmitLeaveRequestView(EmployeeView):
