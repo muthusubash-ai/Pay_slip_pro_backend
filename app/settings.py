@@ -1,9 +1,34 @@
 import os
+import sys
+import types
 from pathlib import Path
 
 import dj_database_url
 from django.core.exceptions import ImproperlyConfigured
 from dotenv import load_dotenv
+
+# `face_recognition_models` (a transitive, unmaintained dependency of
+# `face_recognition`, used for attendance biometric face encoding) still calls
+# the old `pkg_resources.resource_filename()` API to locate its bundled model
+# files. Modern `setuptools` (upgraded here to fix known CVEs) no longer ships
+# `pkg_resources` at all, so without this shim every face-encode call fails
+# with "No module named 'pkg_resources'" and face registration/punch/verify
+# breaks entirely. This registers a minimal stand-in - just enough for that
+# one call pattern - before anything can import the real dependency chain.
+if "pkg_resources" not in sys.modules:
+    try:
+        import pkg_resources  # noqa: F401 - prefer the real thing if present
+    except ImportError:
+        import importlib
+
+        _pkg_resources_shim = types.ModuleType("pkg_resources")
+
+        def _resource_filename(package_or_requirement: str, resource_name: str) -> str:
+            module = importlib.import_module(package_or_requirement)
+            return os.path.join(os.path.dirname(module.__file__), resource_name)
+
+        _pkg_resources_shim.resource_filename = _resource_filename
+        sys.modules["pkg_resources"] = _pkg_resources_shim
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent

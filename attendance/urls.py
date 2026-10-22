@@ -4,7 +4,8 @@ from .secure_views import (
     GeofenceConfigView, EmployeeLoginView, VerifyFaceView, UpdateProfileView,
     SubmitLeaveRequestView, MyLeaveRequestsView, LeaveActionView, RegisteredDescriptorsView,
     LookupEmployeeView, MonthlySummaryView, SyncToPayslipProView, MeView, LogoutView, GoogleNonceView, GoogleLoginView,
-    AttendanceForgotPasswordView, AttendanceResetPasswordView
+    AttendanceForgotPasswordView, AttendanceResetPasswordView,
+    MissedCheckoutsView, UpdateAttendanceCheckoutView,
 )
 
 urlpatterns = [
@@ -29,4 +30,6 @@ urlpatterns = [
     path('leave-request/', SubmitLeaveRequestView.as_view(), name='leave-request'),
     path('my-leaves/', MyLeaveRequestsView.as_view(), name='my-leaves'),
     path('leave-action/', LeaveActionView.as_view(), name='leave-action'),
+    path('missed-checkouts/', MissedCheckoutsView.as_view(), name='missed-checkouts'),
+    path('update-checkout/', UpdateAttendanceCheckoutView.as_view(), name='update-checkout'),
 ]

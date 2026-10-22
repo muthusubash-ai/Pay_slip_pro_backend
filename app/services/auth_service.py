@@ -159,11 +159,16 @@ def logout_user(db, refresh_token: str) -> None:
         pass
 
 
-def update_profile(db, user: User, full_name: str | None = None, phone: str | None = None) -> User:
+def update_profile(
+    db, user: User, full_name: str | None = None, phone: str | None = None,
+    notification_email: str | None = None,
+) -> User:
     if full_name is not None:
         user.full_name = full_name
     if phone is not None:
         user.phone = phone.strip() if phone else None
+    if notification_email is not None:
+        user.notification_email = notification_email.strip().lower() if notification_email else None
     user.save()
     return user
 

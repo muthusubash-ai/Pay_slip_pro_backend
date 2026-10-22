@@ -328,12 +328,14 @@ class AuthViews:
             serializer.is_valid(raise_exception=True)
             full_name = serializer.validated_data.get("full_name")
             phone = serializer.validated_data.get("phone")
-            if full_name is not None or phone is not None:
+            notification_email = serializer.validated_data.get("notification_email")
+            if full_name is not None or phone is not None or notification_email is not None:
                 user = auth_service.update_profile(
                     None,
                     request.user,
                     full_name=full_name,
                     phone=phone,
+                    notification_email=notification_email,
                 )
             else:
                 user = request.user
@@ -531,7 +533,8 @@ class EmployeeViews:
             search = request.GET.get("search")
             department = request.GET.get("department")
             sort_by = request.GET.get("sort") or request.GET.get("sort_by")
-            res = employee_service.list_employees(None, request.user, page, per_page, search, department, sort_by=sort_by)
+            status_param = request.GET.get("status", "active")
+            res = employee_service.list_employees(None, request.user, page, per_page, search, department, sort_by=sort_by, status=status_param)
             return Response(EmployeeListResponseSerializer(res).data)
         elif request.method == "POST":
             employee_limit = get_employee_limit(request.user)
@@ -542,7 +545,7 @@ class EmployeeViews:
                     "Upgrade your plan to add more employees."
                 )
             send_invitation = bool(request.data.get("send_invitation", False))
-            serializer = EmployeeCreateSerializer(data=request.data)
+            serializer = EmployeeCreateSerializer(data=request.data, context={"request": request})
             serializer.is_valid(raise_exception=True)
             employee = employee_service.create_employee(None, request.user, serializer.validated_data)
 
@@ -579,7 +582,8 @@ class EmployeeViews:
             employee = employee_service.get_employee(None, request.user, employee_id)
             return Response(EmployeeResponseSerializer(employee).data)
         elif request.method == "PUT":
-            serializer = EmployeeUpdateSerializer(data=request.data)
+            employee = employee_service.get_employee(None, request.user, employee_id)
+            serializer = EmployeeUpdateSerializer(instance=employee, data=request.data, context={"request": request})
             serializer.is_valid(raise_exception=True)
             employee = employee_service.update_employee(
                 None, request.user, employee_id, serializer.validated_data
@@ -627,6 +631,27 @@ class EmployeeViews:
             return Response({"detail": f"Registration invitation email sent to {employee.email} successfully."})
         else:
             return Response({"detail": "Failed to send email. Please verify SMTP settings."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    @staticmethod
+    @api_view(["POST"])
+    @permission_classes([IsAuthenticated])
+    def reactivate_employee(request, employee_id):
+        new_email = request.data.get("email")
+        employee = employee_service.reactivate_employee(None, request.user, employee_id, new_email=new_email)
+        return Response(EmployeeResponseSerializer(employee).data, status=status.HTTP_200_OK)
+
+    @staticmethod
+    @api_view(["DELETE"])
+    @permission_classes([IsAuthenticated])
+    def permanent_delete_employee(request, employee_id):
+        res = employee_service.permanent_delete_employee(None, request.user, employee_id)
+        return Response(
+            {
+                "detail": f"Employee {res.get('full_name', '')} ({res.get('employee_code', '')}) and all of their records have been permanently deleted.",
+                "id": employee_id,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 # -------------------------------------------------------------

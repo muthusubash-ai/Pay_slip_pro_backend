@@ -58,6 +58,10 @@ class User(AbstractBaseUser, TimestampModel):
     admin_password = models.CharField(max_length=255, null=True, blank=True)
     auth_version = models.PositiveIntegerField(default=0)
     is_platform_admin = models.BooleanField(default=False)
+    # Where HR-facing operational notifications (leave/permission requests, etc.)
+    # are sent. Lets the account's login email differ from the inbox HR actually
+    # watches. Falls back to `email` when blank.
+    notification_email = models.EmailField(max_length=255, null=True, blank=True)
 
     objects = UserManager()
 
@@ -133,6 +137,10 @@ class User(AbstractBaseUser, TimestampModel):
     def company_name(self):
         company = getattr(self, "company", None)
         return company.company_name if company else "-"
+
+    @property
+    def effective_notification_email(self):
+        return (self.notification_email or self.email or "").strip()
 
     def __str__(self):
         return self.email

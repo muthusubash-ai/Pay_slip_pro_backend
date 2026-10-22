@@ -37,6 +37,16 @@ class Employee(TimestampModel):
     # employee falls back to the company's default office_start_time/office_end_time.
     shift_start_time = models.CharField(max_length=20, null=True, blank=True)
     shift_end_time = models.CharField(max_length=20, null=True, blank=True)
+    # Optional - used only to sanity-check the face captured during biometric
+    # registration against the employee's recorded gender. Left blank, that
+    # check is skipped.
+    GENDER_CHOICES = (("MALE", "Male"), ("FEMALE", "Female"))
+    gender = models.CharField(max_length=10, choices=GENDER_CHOICES, null=True, blank=True)
+    # Set when is_active is turned off (deactivated). A deactivated employee whose
+    # deactivated_at is older than DEACTIVATED_RETENTION_DAYS gets permanently
+    # purged (employee row + cascaded attendance/salary-slip/leave data) the next
+    # time the employee list is loaded. Cleared on reactivation.
+    deactivated_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "employees"

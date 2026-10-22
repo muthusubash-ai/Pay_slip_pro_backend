@@ -284,11 +284,30 @@ def send_leave_request_notification_email(
     type_label = type_labels.get(request_type.upper(), request_type)
     subject = f"🔔 Leave Request - {employee_name} ({type_label})"
 
-    # Format duration
-    if request_type.upper() == 'PERMISSION':
+    # Format duration and request badge colors
+    req_upper = request_type.upper()
+    if req_upper == 'PERMISSION':
         duration_str = f"{duration_hours or 2} Hours"
-    elif request_type.upper() == 'HALF_DAY':
+        badge_bg = '#3b1d54'
+        badge_color = '#d8b4fe'
+        badge_border = '#7e22ce'
+    elif req_upper == 'HALF_DAY':
         duration_str = "Half Day (0.5 Day)"
+        badge_bg = '#452203'
+        badge_color = '#fcd34d'
+        badge_border = '#b45309'
+    elif req_upper == 'SICK':
+        try:
+            from datetime import datetime
+            d1 = datetime.strptime(start_date, '%Y-%m-%d')
+            d2 = datetime.strptime(end_date, '%Y-%m-%d')
+            days_count = max(1, (d2 - d1).days + 1)
+            duration_str = f"{days_count} Day{'s' if days_count > 1 else ''}"
+        except Exception:
+            duration_str = "1 Day"
+        badge_bg = '#3b1d28'
+        badge_color = '#fca5a5'
+        badge_border = '#b91c1c'
     else:
         try:
             from datetime import datetime
@@ -298,93 +317,301 @@ def send_leave_request_notification_email(
             duration_str = f"{days_count} Day{'s' if days_count > 1 else ''}"
         except Exception:
             duration_str = "1 Day"
+        badge_bg = '#1e295d'
+        badge_color = '#93c5fd'
+        badge_border = '#2563eb'
 
     from html import escape
-    approve_url = escape(f"{settings.FRONTEND_URL.rstrip('/')}/attendance?leave_request={request_id}", quote=True)
-    reject_url = approve_url
-    employee_name, employee_email, reason, sender_name = (escape(str(value)) for value in (employee_name, employee_email, reason, sender_name))
-    type_label, start_date, end_date = (escape(str(value)) for value in (type_label, start_date, end_date))
+    try:
+        from datetime import datetime
+        d_start = datetime.strptime(start_date, '%Y-%m-%d')
+        date_param = f"&month={d_start.month}&year={d_start.year}"
+    except Exception:
+        date_param = ""
 
-    html_body = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #121212; margin: 0; padding: 24px 12px; color: #f1f5f9; }}
-        .card {{ max-width: 440px; margin: 0 auto; background-color: #18181b; border-radius: 20px; overflow: hidden; border: 1px solid #27272a; box-shadow: 0 12px 36px rgba(0,0,0,0.6); }}
-        .header {{ background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: #ffffff; padding: 26px 20px; text-align: center; }}
-        .header h2 {{ margin: 0; font-size: 21px; font-weight: 800; }}
-        .header p {{ margin: 4px 0 0 0; font-size: 13px; opacity: 0.95; }}
-        .body {{ padding: 24px 20px; }}
-        .greeting {{ font-size: 15px; font-weight: 800; margin-bottom: 4px; color: #ffffff; }}
-        .subtext {{ font-size: 13px; color: #a1a1aa; margin-bottom: 18px; }}
-        .table-box {{ width: 100%; border-collapse: collapse; border-radius: 12px; overflow: hidden; background: #27272a; border: 1px solid #3f3f46; margin-bottom: 24px; font-size: 13px; }}
-        .table-box tr {{ border-bottom: 1px solid #3f3f46; }}
-        .table-box tr:last-child {{ border-bottom: none; }}
-        .table-box td {{ padding: 12px 14px; }}
-        .table-box td.label {{ width: 38%; color: #94a3b8; font-weight: 700; background: #202023; white-space: nowrap; }}
-        .table-box td.val {{ color: #ffffff; font-weight: 600; word-break: break-word; }}
-        .actions-title {{ text-align: center; font-size: 13px; font-weight: 800; color: #e4e4e7; margin-bottom: 12px; }}
-        .btn-container {{ text-align: center; margin-bottom: 12px; display: flex; flex-direction: column; gap: 10px; align-items: center; }}
-        .btn-approve {{ display: block; width: 90%; max-width: 280px; padding: 12px 0; background: #10b981; color: #ffffff !important; text-decoration: none; border-radius: 10px; font-weight: 800; font-size: 14px; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4); text-align: center; margin: 0 auto 10px auto; }}
-        .btn-reject {{ display: block; width: 90%; max-width: 280px; padding: 12px 0; background: #ef4444; color: #ffffff !important; text-decoration: none; border-radius: 10px; font-weight: 800; font-size: 14px; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4); text-align: center; margin: 0 auto; }}
-        .footer {{ background: #18181b; border-top: 1px solid #27272a; padding: 14px; text-align: center; font-size: 11px; color: #71717a; }}
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <div class="header">
-          <h2>📋 New Leave Request</h2>
-          <p>{sender_name}</p>
-        </div>
-        <div class="body">
-          <div class="greeting">Dear MD,</div>
-          <div class="subtext">A new leave request needs your approval:</div>
+    frontend_base = getattr(settings, "FRONTEND_URL", "http://localhost:5173").rstrip('/')
+    action_url = escape(f"{frontend_base}/attendance?leave_request={request_id}{date_param}", quote=True)
+    employee_name_esc, employee_email_esc, reason_esc, sender_name_esc = (
+        escape(str(value)) for value in (employee_name, employee_email, reason, sender_name)
+    )
+    type_label_esc, start_date_esc, end_date_esc, duration_str_esc = (
+        escape(str(value)) for value in (type_label, start_date, end_date, duration_str)
+    )
 
-          <table class="table-box">
-            <tr>
-              <td class="label">👤 Employee</td>
-              <td class="val">{employee_name}</td>
-            </tr>
-            <tr>
-              <td class="label">📧 Email</td>
-              <td class="val">{employee_email}</td>
-            </tr>
-            <tr>
-              <td class="label">📝 Type</td>
-              <td class="val">{type_label}</td>
-            </tr>
-            <tr>
-              <td class="label">📅 From</td>
-              <td class="val">{start_date}</td>
-            </tr>
-            <tr>
-              <td class="label">📅 To</td>
-              <td class="val">{end_date}</td>
-            </tr>
-            <tr>
-              <td class="label">⏱️ Days/Hours</td>
-              <td class="val">{duration_str}</td>
-            </tr>
-            <tr>
-              <td class="label">💬 Reason</td>
-              <td class="val">{reason}</td>
-            </tr>
-          </table>
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Leave Request</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0b0f19; margin: 0; padding: 24px 12px; color: #f1f5f9; -webkit-font-smoothing: antialiased;">
+  <!-- Outer Table Wrapper for 100% email client centering -->
+  <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="background-color: #0b0f19; width: 100%;">
+    <tr>
+      <td align="center" style="padding: 0;">
+        <!-- Main Card Container -->
+        <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 460px; margin: 0 auto; background-color: #111827; border: 1px solid #1f2937; border-radius: 16px; overflow: hidden; box-shadow: 0 16px 36px rgba(0,0,0,0.5);">
+          <!-- Header Banner -->
+          <tr>
+            <td align="center" style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 24px 20px; color: #ffffff; text-align: center;">
+              <div style="font-size: 21px; font-weight: 800; letter-spacing: -0.2px; line-height: 1.3; margin: 0 0 4px 0;">
+                &#x1F4CB; New Leave Request
+              </div>
+              <div style="font-size: 13px; font-weight: 500; opacity: 0.95; color: #f3e8ff;">
+                {sender_name_esc}
+              </div>
+            </td>
+          </tr>
+          <!-- Body Content -->
+          <tr>
+            <td style="padding: 24px 20px;">
+              <div style="font-size: 15px; font-weight: 700; color: #ffffff; margin-bottom: 4px;">
+                Dear MD,
+              </div>
+              <div style="font-size: 13px; color: #94a3b8; margin-bottom: 20px; line-height: 1.5;">
+                A new leave request needs your approval:
+              </div>
 
-          <div class="actions-title">Take Action:</div>
-          <div class="btn-container">
-            <a href="{approve_url}" class="btn-approve" target="_blank">✅ APPROVE</a>
-            <a href="{reject_url}" class="btn-reject" target="_blank">❌ REJECT</a>
-          </div>
-        </div>
-        <div class="footer">
-          {sender_name} - HR System
-        </div>
+              <!-- Information Details Grid -->
+              <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="border-collapse: separate; border-spacing: 0; background-color: #1e293b; border: 1px solid #334155; border-radius: 12px; overflow: hidden; margin-bottom: 24px;">
+                <tr>
+                  <td style="width: 36%; min-width: 120px; padding: 12px 14px; background-color: #162032; color: #94a3b8; font-size: 12px; font-weight: 700; border-bottom: 1px solid #334155; border-right: 1px solid #334155; vertical-align: middle; white-space: nowrap;">
+                    &#x1F464;&nbsp; Employee
+                  </td>
+                  <td style="padding: 12px 16px; background-color: #1e293b; color: #ffffff; font-size: 13px; font-weight: 700; border-bottom: 1px solid #334155; vertical-align: middle; word-break: break-word;">
+                    {employee_name_esc}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="width: 36%; min-width: 120px; padding: 12px 14px; background-color: #162032; color: #94a3b8; font-size: 12px; font-weight: 700; border-bottom: 1px solid #334155; border-right: 1px solid #334155; vertical-align: middle; white-space: nowrap;">
+                    &#x1F4E7;&nbsp; Email
+                  </td>
+                  <td style="padding: 12px 16px; background-color: #1e293b; color: #60a5fa; font-size: 13px; font-weight: 600; border-bottom: 1px solid #334155; vertical-align: middle; word-break: break-word;">
+                    <a href="mailto:{employee_email_esc}" style="color: #60a5fa !important; text-decoration: none; font-weight: 600;">{employee_email_esc}</a>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="width: 36%; min-width: 120px; padding: 12px 14px; background-color: #162032; color: #94a3b8; font-size: 12px; font-weight: 700; border-bottom: 1px solid #334155; border-right: 1px solid #334155; vertical-align: middle; white-space: nowrap;">
+                    &#x1F4DD;&nbsp; Type
+                  </td>
+                  <td style="padding: 12px 16px; background-color: #1e293b; color: #ffffff; font-size: 13px; font-weight: 600; border-bottom: 1px solid #334155; vertical-align: middle;">
+                    <span style="display: inline-block; background-color: {badge_bg}; color: {badge_color}; border: 1px solid {badge_border}; padding: 3px 10px; border-radius: 6px; font-size: 12px; font-weight: 700;">
+                      {type_label_esc}
+                    </span>
+                  </td>
+                </tr>
+                <tr>
+                  <td style="width: 36%; min-width: 120px; padding: 12px 14px; background-color: #162032; color: #94a3b8; font-size: 12px; font-weight: 700; border-bottom: 1px solid #334155; border-right: 1px solid #334155; vertical-align: middle; white-space: nowrap;">
+                    &#x1F4C5;&nbsp; From
+                  </td>
+                  <td style="padding: 12px 16px; background-color: #1e293b; color: #ffffff; font-size: 13px; font-weight: 700; border-bottom: 1px solid #334155; vertical-align: middle;">
+                    {start_date_esc}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="width: 36%; min-width: 120px; padding: 12px 14px; background-color: #162032; color: #94a3b8; font-size: 12px; font-weight: 700; border-bottom: 1px solid #334155; border-right: 1px solid #334155; vertical-align: middle; white-space: nowrap;">
+                    &#x1F4C5;&nbsp; To
+                  </td>
+                  <td style="padding: 12px 16px; background-color: #1e293b; color: #ffffff; font-size: 13px; font-weight: 700; border-bottom: 1px solid #334155; vertical-align: middle;">
+                    {end_date_esc}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="width: 36%; min-width: 120px; padding: 12px 14px; background-color: #162032; color: #94a3b8; font-size: 12px; font-weight: 700; border-bottom: 1px solid #334155; border-right: 1px solid #334155; vertical-align: middle; white-space: nowrap;">
+                    &#x23F1;&#xFE0F;&nbsp; Days/Hours
+                  </td>
+                  <td style="padding: 12px 16px; background-color: #1e293b; color: #38bdf8; font-size: 13px; font-weight: 700; border-bottom: 1px solid #334155; vertical-align: middle;">
+                    {duration_str_esc}
+                  </td>
+                </tr>
+                <tr>
+                  <td style="width: 36%; min-width: 120px; padding: 12px 14px; background-color: #162032; color: #94a3b8; font-size: 12px; font-weight: 700; border-right: 1px solid #334155; vertical-align: top; white-space: nowrap;">
+                    &#x1F4AC;&nbsp; Reason
+                  </td>
+                  <td style="padding: 12px 16px; background-color: #1e293b; color: #f8fafc; font-size: 13px; font-weight: 500; line-height: 1.5; vertical-align: top; word-break: break-word;">
+                    {reason_esc}
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Action Section Header -->
+              <div style="text-align: center; margin: 0 0 14px 0;">
+                <span style="font-size: 13px; font-weight: 800; color: #e2e8f0; letter-spacing: 0.3px;">
+                  Take Action:
+                </span>
+              </div>
+
+              <!-- Two Equal Action Buttons in a Rigid Table Layout (Guaranteed 16px Gap) -->
+              <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin: 0 auto; max-width: 380px;">
+                <tr>
+                  <td align="center" width="50%" style="padding: 0 8px 0 0;">
+                    <a href="{action_url}" target="_blank" style="display: block; width: 100%; box-sizing: border-box; background-color: #10b981; color: #ffffff !important; text-decoration: none; padding: 13px 14px; border-radius: 10px; font-weight: 800; font-size: 13px; text-align: center; letter-spacing: 0.5px; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.4);">
+                      &#x2705;&nbsp; APPROVE
+                    </a>
+                  </td>
+                  <td align="center" width="50%" style="padding: 0 0 0 8px;">
+                    <a href="{action_url}" target="_blank" style="display: block; width: 100%; box-sizing: border-box; background-color: #ef4444; color: #ffffff !important; text-decoration: none; padding: 13px 14px; border-radius: 10px; font-weight: 800; font-size: 13px; text-align: center; letter-spacing: 0.5px; box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);">
+                      &#x274C;&nbsp; REJECT
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <!-- Footer -->
+          <tr>
+            <td align="center" style="background-color: #0b0f19; border-top: 1px solid #1f2937; padding: 14px 20px; text-align: center; font-size: 11px; color: #64748b;">
+              {sender_name_esc} &bull; HR System
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)
+
+
+def send_leave_decision_email(
+    to_email: str,
+    employee_name: str,
+    request_type: str,
+    start_date: str,
+    end_date: str,
+    status: str,
+    admin_remarks: str = "",
+    company_name: str = "",
+) -> bool:
+    """Notify the employee once HR approves or rejects their leave/permission request."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid employee email for leave decision notice: %s", to_email)
+        return False
+
+    from html import escape
+
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    type_labels = {
+        'SICK': 'Sick Leave', 'CASUAL': 'Casual Leave',
+        'HALF_DAY': 'Half Day Leave', 'PERMISSION': 'Permission Request',
+    }
+    type_label = type_labels.get(request_type.upper(), request_type)
+    approved = status.upper() == 'APPROVED'
+    subject = f"{'✅ Approved' if approved else '❌ Rejected'}: Your {type_label} Request"
+    badge_bg, badge_color, badge_border = ('#064e3b', '#6ee7b7', '#059669') if approved else ('#450a0a', '#fca5a5', '#dc2626')
+
+    employee_name_esc, type_label_esc, start_date_esc, end_date_esc, sender_name_esc, remarks_esc = (
+        escape(str(v)) for v in (employee_name, type_label, start_date, end_date, sender_name, admin_remarks or '-')
+    )
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #4f46e5 0%, #3b82f6 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">Leave &amp; Permission Request Update</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear <strong>{employee_name_esc}</strong>,</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.6;">Your request has been reviewed:</p>
+      <div style="text-align: center; margin: 16px 0;">
+        <span style="display: inline-block; background-color: {badge_bg}; color: {badge_color}; border: 1px solid {badge_border}; padding: 6px 16px; border-radius: 8px; font-size: 14px; font-weight: 800;">
+          {'APPROVED' if approved else 'REJECTED'}
+        </span>
       </div>
-    </body>
-    </html>
-    """
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;">
+        <tr><td style="padding: 10px 14px; color: #64748b; border-bottom: 1px solid #e2e8f0;">Type</td><td style="padding: 10px 14px; text-align: right; font-weight: 700; border-bottom: 1px solid #e2e8f0;">{type_label_esc}</td></tr>
+        <tr><td style="padding: 10px 14px; color: #64748b; border-bottom: 1px solid #e2e8f0;">From</td><td style="padding: 10px 14px; text-align: right; font-weight: 700; border-bottom: 1px solid #e2e8f0;">{start_date_esc}</td></tr>
+        <tr><td style="padding: 10px 14px; color: #64748b;">To</td><td style="padding: 10px 14px; text-align: right; font-weight: 700;">{end_date_esc}</td></tr>
+      </table>
+      {f'<p style="font-size: 12px; color: #64748b; margin-top: 16px;"><strong>Admin remarks:</strong> {remarks_esc}</p>' if admin_remarks else ''}
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)
+
+
+def send_missed_checkout_email(
+    to_email: str, employee_name: str, date_str: str, check_in: str, company_name: str = "",
+) -> bool:
+    """Notify HR that an employee punched in but never punched out that day."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid HR email for missed-checkout notice: %s", to_email)
+        return False
+
+    from html import escape
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    subject = f"Missed Punch-Out: {employee_name} on {date_str}"
+    employee_name_esc, date_str_esc, check_in_esc, sender_name_esc = (
+        escape(str(v)) for v in (employee_name, date_str, check_in or '-', sender_name)
+    )
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">Missed Punch-Out Alert</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear HR,</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.6;">
+        <strong>{employee_name_esc}</strong> checked in but never checked out. Please review and correct their
+        check-out time from the Attendance page.
+      </p>
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;">
+        <tr><td style="padding: 10px 14px; color: #64748b; border-bottom: 1px solid #e2e8f0;">Date</td><td style="padding: 10px 14px; text-align: right; font-weight: 700; border-bottom: 1px solid #e2e8f0;">{date_str_esc}</td></tr>
+        <tr><td style="padding: 10px 14px; color: #64748b;">Check-In</td><td style="padding: 10px 14px; text-align: right; font-weight: 700;">{check_in_esc}</td></tr>
+      </table>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)
+
+
+def send_missed_checkout_reminder_email(
+    to_email: str, employee_name: str, date_str: str, check_in: str, company_name: str = "",
+) -> bool:
+    """Remind the employee themselves that they forgot to punch out."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid employee email for missed-checkout reminder: %s", to_email)
+        return False
+
+    from html import escape
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    subject = f"Reminder: You didn't punch out on {date_str}"
+    employee_name_esc, date_str_esc, check_in_esc, sender_name_esc = (
+        escape(str(v)) for v in (employee_name, date_str, check_in or '-', sender_name)
+    )
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">Missed Punch-Out</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear <strong>{employee_name_esc}</strong>,</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.6;">
+        You checked in on <strong>{date_str_esc}</strong> at <strong>{check_in_esc}</strong> but we didn't see a
+        check-out. HR has been notified and will correct your record - please reach out to them if the check-in
+        itself looks wrong.
+      </p>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
     return _send_email(to_email, subject, html_body)

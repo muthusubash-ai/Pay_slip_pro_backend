@@ -30,6 +30,41 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def parse_face_vector(stored):
+    """Normalize a stored `Employee.face_encoding` value into a 128-float list, or None."""
+    import json
+    if not stored:
+        return None
+    if isinstance(stored, str):
+        try:
+            stored = json.loads(stored)
+        except Exception:
+            return None
+    if isinstance(stored, dict):
+        if 'descriptor' in stored:
+            stored = stored['descriptor']
+        elif 'face_encoding' in stored:
+            stored = stored['face_encoding']
+        elif 'face_descriptor' in stored:
+            stored = stored['face_descriptor']
+        else:
+            try:
+                stored = [stored[str(i)] for i in range(128)]
+            except Exception:
+                return None
+    if isinstance(stored, (list, tuple)) and len(stored) == 128:
+        try:
+            return [float(x) for x in stored]
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+def face_distance(vector_a, vector_b):
+    import math
+    return math.dist(vector_a, vector_b)
+
+
 def issue_invite(employee):
     if not employee.is_active or not employee.user.is_active:
         raise ValidationError('Only active employees can be invited.')
@@ -95,22 +130,42 @@ class AttendanceThrottle(SimpleRateThrottle):
     scope = 'attendance'
     rate = '1000/hour' if settings.DEBUG else '120/hour'
 
+    def parse_rate(self, rate):
+        # Keep each subclass's configured request allowance, but always reset the
+        # window every 30 seconds instead of the minute/hour window the rate string
+        # implies - so a throttled action (face retake, face recognize, password
+        # change, etc.) waits at most ~30s before it can be retried.
+        num_requests, _ = super().parse_rate(rate)
+        return num_requests, 30
+
     def get_cache_key(self, request, view):
         return self.cache_format % {'scope': self.scope, 'ident': self.get_ident(request)}
 
 
 class LoginThrottle(AttendanceThrottle):
     scope = 'attendance_login'
-    rate = '60/min' if settings.DEBUG else '20/min'
+    # Numerator is the cap for the 30s window (see parse_rate above) - 10 keeps the
+    # same effective per-minute ceiling as the original 20/min, just with a shorter,
+    # friendlier wait once throttled, instead of silently doubling the brute-force
+    # allowance that a plain window-shrink would have caused.
+    rate = '60/min' if settings.DEBUG else '10/min'
 
 
 class PhotoThrottle(AttendanceThrottle):
     scope = 'attendance_photo'
-    rate = '1000/hour' if settings.DEBUG else '20/hour'
+    # This gates face capture on EmployeeRegisterView (public, unauthenticated) and
+    # the face-encoding checks on VerifyFaceView/MarkAttendanceView, which are all
+    # CPU-expensive. Numerator is the cap for the 30s window (see parse_rate above):
+    # 6 is enough for a few legitimate retakes, without opening the public register
+    # endpoint up to the ~2400/hour a naive window-shrink from 20/hour would allow.
+    rate = '1000/hour' if settings.DEBUG else '6/hour'
 
 
 class AccountLoginThrottle(AttendanceThrottle):
     scope = 'attendance_account_login'
+    # Numerator is the cap for the 30s window (see parse_rate above) - kept at the
+    # original 5 wrong-attempts-before-block ceiling per account; only the window
+    # is shorter now (30s instead of 60s), so the block itself clears faster.
     rate = '5/min'
 
     def get_cache_key(self, request, view):
@@ -145,9 +200,41 @@ def encode_photo(upload):
     except (ImportError, SystemExit) as exc:
         raise BiometricUnavailable() from exc
     array = np.array(img)
-    locations = face_recognition.face_locations(array, model='hog')
-    if len(locations) != 1:
-        raise ValidationError('Use a clear photo containing exactly one face.')
+    locations = face_recognition.face_locations(array, number_of_times_to_upsample=1, model='hog')
+    if len(locations) == 0:
+        # Retry with upsampling to catch smaller or distant webcam faces
+        locations = face_recognition.face_locations(array, number_of_times_to_upsample=2, model='hog')
+    if len(locations) == 0:
+        # Fallback to OpenCV CascadeClassifier if available
+        try:
+            import cv2
+            gray = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
+            cascades = []
+            if hasattr(cv2, 'CascadeClassifier') and hasattr(cv2, 'data'):
+                for xml_name in ['haarcascade_frontalface_default.xml', 'haarcascade_frontalface_alt2.xml']:
+                    try:
+                        c = cv2.CascadeClassifier(cv2.data.haarcascades + xml_name)
+                        if not c.empty():
+                            cascades.append(c)
+                    except Exception:
+                        pass
+            for cascade in cascades:
+                detected = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=3, minSize=(30, 30))
+                if len(detected) > 0:
+                    locations = [(int(y), int(x + w), int(y + h), int(x)) for (x, y, w, h) in detected]
+                    break
+        except Exception:
+            pass
+
+    if len(locations) == 0:
+        raise ValidationError('No clear human face detected. Please face the camera and try again.')
+
+    if len(locations) > 1:
+        # In selfie / kiosk capture, pick the largest foreground face
+        locations = sorted(locations, key=lambda loc: (loc[2] - loc[0]) * (loc[1] - loc[3]), reverse=True)
+        primary_face = locations[0]
+        locations = [primary_face]
+
     encodings = face_recognition.face_encodings(array, locations)
     if len(encodings) != 1:
         raise ValidationError('Unable to verify the face in this photo.')

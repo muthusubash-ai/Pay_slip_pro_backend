@@ -156,6 +156,10 @@ def test_owner_leave_scope_and_get_has_no_side_effect(accounts):
 
 def test_invite_required_single_use_and_server_owned_identity(accounts, monkeypatch):
     _, payroll, employee = accounts[0]
+    # Simulate an account that hasn't completed registration yet (no password on
+    # file) - a fresh invite must let it register once, but not again afterwards.
+    employee.password = None
+    employee.save(update_fields=['password'])
     client = APIClient()
     assert client.post(PREFIX + 'register/', {'password': PASSWORD}).status_code == 403
     token = issue_invite(payroll)
@@ -535,5 +539,125 @@ def test_permission_allowance_and_excess_deduction(accounts):
     emp_s2 = [s for s in summary2 if s['employee_id'] == payroll.id][0]
     assert emp_s2['permission_days'] == 4
     assert emp_s2['leave_deduction'] == 1000.0
+
+
+def test_permission_step_out_and_return_cycle(accounts, monkeypatch):
+    """A step-out under an approved PERMISSION, followed by a return punch, keeps the
+    day's single Attendance row open (no check_out) until the real end-of-day checkout,
+    and the worked-hours calc excludes the permission gap."""
+    owner, payroll, employee = accounts[0]
+    payroll.date_of_joining = date(2020, 1, 1)
+    payroll.save()
+
+    monkeypatch.setattr('attendance.secure_views.encode_photo', lambda _: [0.1] * 128)
+    client = session_client(employee)
+    punch = lambda: {'latitude': 8.78, 'longitude': 78.11, 'face_image': SimpleUploadedFile('p.jpg', b'x', content_type='image/jpeg')}
+    # date is auto_now_add, so it always lands on the real current date regardless of the
+    # timezone.localtime() mock below (which only controls the time-of-day decisions).
+    today = date.today()
+    Attendance.objects.filter(employee=employee, date=today).delete()
+
+    def at(h, m):
+        fixed_now = timezone.make_aware(datetime(today.year, today.month, today.day, h, m, 0))
+        monkeypatch.setattr('attendance.secure_views.timezone.localtime', lambda: fixed_now)
+
+    # 1. Check-in at 09:00
+    at(9, 0)
+    r1 = client.post(PREFIX + 'mark-attendance/', punch(), format='multipart')
+    assert r1.status_code == 201 and r1.data['type'] == 'CHECK_IN'
+
+    # 2. Approved 2-hour permission for today
+    LeaveRequest.objects.create(
+        employee=employee, request_type='PERMISSION', start_date=today, end_date=today,
+        duration_hours=2.0, status='APPROVED', reason='Bank work',
+    )
+
+    # 3. Step-out at 12:00 (returns by 14:00, well before the 18:00 default boundary)
+    at(12, 0)
+    r2 = client.post(PREFIX + 'mark-attendance/', punch(), format='multipart')
+    assert r2.status_code == 201
+    assert r2.data['type'] == 'PERMISSION_OUT'
+    record = Attendance.objects.get(employee=employee, date=today)
+    assert record.check_out is None
+    assert str(record.permission_out) == '12:00:00'
+
+    # 4. Return at 13:00
+    at(13, 0)
+    r3 = client.post(PREFIX + 'mark-attendance/', punch(), format='multipart')
+    assert r3.status_code == 201
+    assert r3.data['type'] == 'PERMISSION_IN'
+    record.refresh_from_db()
+    assert record.check_out is None
+    assert str(record.permission_in) == '13:00:00'
+
+    # 5. Final checkout at 18:30 (after the 18:00 boundary)
+    at(18, 30)
+    r4 = client.post(PREFIX + 'mark-attendance/', punch(), format='multipart')
+    assert r4.status_code == 201
+    assert r4.data['type'] == 'PUNCH_OUT'
+    record.refresh_from_db()
+    assert record.check_out is not None
+
+    # 6. Monthly summary's worked hours exclude the 1-hour permission gap:
+    # 09:00 -> 18:30 = 9.5h, minus the 12:00-13:00 (1h) gap = 8.5h.
+    from app.services.attendance_service import get_monthly_attendance
+    rows = get_monthly_attendance(None, owner, payroll.id, today.month, today.year)
+    row = next(r for r in rows if r['date'] == today)
+    assert row['duration_hours'] == 8.5
+    assert row['permission_out'] == '12:00 PM'
+    assert row['permission_in'] == '01:00 PM'
+
+
+def test_permission_step_out_without_approval_is_rejected(accounts, monkeypatch):
+    owner, payroll, employee = accounts[0]
+    payroll.date_of_joining = date(2020, 1, 1)
+    payroll.save()
+    monkeypatch.setattr('attendance.secure_views.encode_photo', lambda _: [0.1] * 128)
+    client = session_client(employee)
+    punch = lambda: {'latitude': 8.78, 'longitude': 78.11, 'face_image': SimpleUploadedFile('p.jpg', b'x', content_type='image/jpeg')}
+    today = date.today()
+    Attendance.objects.filter(employee=employee, date=today).delete()
+
+    def at(h, m):
+        fixed_now = timezone.make_aware(datetime(today.year, today.month, today.day, h, m, 0))
+        monkeypatch.setattr('attendance.secure_views.timezone.localtime', lambda: fixed_now)
+
+    at(9, 0)
+    assert client.post(PREFIX + 'mark-attendance/', punch(), format='multipart').status_code == 201
+    at(12, 0)
+    r = client.post(PREFIX + 'mark-attendance/', punch(), format='multipart')
+    assert r.status_code == 403
+
+
+def test_permission_reaching_shift_end_becomes_final_checkout(accounts, monkeypatch):
+    """If the permission's duration would run past the shift's checkout boundary, there's
+    no time left to return - so the step-out punch becomes the real final checkout, not a
+    PERMISSION_OUT (otherwise the missed-checkout detector would wrongly flag it later)."""
+    owner, payroll, employee = accounts[0]
+    payroll.date_of_joining = date(2020, 1, 1)
+    payroll.save()
+    monkeypatch.setattr('attendance.secure_views.encode_photo', lambda _: [0.1] * 128)
+    client = session_client(employee)
+    punch = lambda: {'latitude': 8.78, 'longitude': 78.11, 'face_image': SimpleUploadedFile('p.jpg', b'x', content_type='image/jpeg')}
+    today = date.today()
+    Attendance.objects.filter(employee=employee, date=today).delete()
+
+    def at(h, m):
+        fixed_now = timezone.make_aware(datetime(today.year, today.month, today.day, h, m, 0))
+        monkeypatch.setattr('attendance.secure_views.timezone.localtime', lambda: fixed_now)
+
+    at(9, 0)
+    assert client.post(PREFIX + 'mark-attendance/', punch(), format='multipart').status_code == 201
+    LeaveRequest.objects.create(
+        employee=employee, request_type='PERMISSION', start_date=today, end_date=today,
+        duration_hours=8.0, status='APPROVED', reason='Long errand',
+    )
+    at(12, 0)  # 12:00 + 8h = 20:00, past the 18:00 default boundary - no time to return.
+    r = client.post(PREFIX + 'mark-attendance/', punch(), format='multipart')
+    assert r.status_code == 201
+    assert r.data['type'] == 'PUNCH_OUT'
+    record = Attendance.objects.get(employee=employee, date=today)
+    assert record.check_out is not None
+    assert record.permission_out is None
 
 

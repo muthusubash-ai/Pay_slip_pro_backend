@@ -35,6 +35,7 @@ class UpdateProfileRequestSerializer(serializers.Serializer):
     full_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     company_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    notification_email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
 
     def validate_full_name(self, value):
         if not value:
@@ -60,7 +61,7 @@ class UserResponseSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "id", "email", "full_name", "phone", "company_name", "role",
+            "id", "email", "full_name", "phone", "notification_email", "company_name", "role",
             "plan", "plan_expires_at", "is_plan_expired", "plan_days_left",
             "is_active", "is_platform_admin", "created_at"
         ]

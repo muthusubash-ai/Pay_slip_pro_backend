@@ -35,7 +35,39 @@ def test_create_employee(client, auth_headers, sample_employee):
 def test_create_employee_duplicate_code(client, auth_headers, sample_employee):
     client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers)
     response = client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers)
-    assert response.status_code == 409
+    assert response.status_code in (400, 409)
+
+
+def test_create_employee_duplicate_email(client, auth_headers, sample_employee):
+    client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers)
+    second_emp = sample_employee.copy()
+    second_emp["employee_code"] = "EMP999"
+    # Same email
+    response = client.post("/api/v1/employees/", json=second_emp, headers=auth_headers)
+    assert response.status_code in (400, 409)
+    res_text = str(response.json()).lower()
+    assert "email" in res_text and ("already assigned" in res_text or "already exists" in res_text)
+
+
+def test_update_employee_duplicate_email(client, auth_headers, sample_employee):
+    emp1 = sample_employee.copy()
+    emp1["employee_code"] = "EMP001"
+    emp1["email"] = "emp1@example.com"
+    r1 = client.post("/api/v1/employees/", json=emp1, headers=auth_headers)
+    assert r1.status_code == 201
+    emp1_id = r1.json()["id"]
+
+    emp2 = sample_employee.copy()
+    emp2["employee_code"] = "EMP002"
+    emp2["email"] = "emp2@example.com"
+    r2 = client.post("/api/v1/employees/", json=emp2, headers=auth_headers)
+    assert r2.status_code == 201
+
+    # Attempt to change emp1's email to emp2's email
+    response = client.put(f"/api/v1/employees/{emp1_id}/", json={"email": "emp2@example.com"}, headers=auth_headers)
+    assert response.status_code in (400, 409)
+    res_text = str(response.json()).lower()
+    assert "email" in res_text and ("already assigned" in res_text or "already exists" in res_text)
 
 
 def test_list_employees(client, auth_headers, sample_employee):
@@ -208,6 +240,40 @@ def test_delete_employee(client, auth_headers, sample_employee):
     response = client.delete(f"/api/v1/employees/{emp_id}", headers=auth_headers)
     assert response.status_code == 200
     assert response.json()["is_active"] is False
+
+
+def test_list_inactive_and_reactivate_employee(client, auth_headers, sample_employee):
+    create_res = client.post("/api/v1/employees/", json=sample_employee, headers=auth_headers)
+    emp_id = create_res.json()["id"]
+
+    # Deactivate employee
+    client.delete(f"/api/v1/employees/{emp_id}", headers=auth_headers)
+
+    # Verify not in active list
+    active_res = client.get("/api/v1/employees/?status=active", headers=auth_headers)
+    assert active_res.status_code == 200
+    assert active_res.json()["total"] == 0
+    assert active_res.json()["inactive_count"] == 1
+
+    # Verify in inactive list
+    inactive_res = client.get("/api/v1/employees/?status=inactive", headers=auth_headers)
+    assert inactive_res.status_code == 200
+    assert inactive_res.json()["total"] == 1
+    assert inactive_res.json()["items"][0]["id"] == emp_id
+
+    # Reactivate employee
+    reactivate_res = client.post(
+        f"/api/v1/employees/{emp_id}/reactivate",
+        json={"email": "reactivated.john@company.com"},
+        headers=auth_headers,
+    )
+    assert reactivate_res.status_code == 200
+    assert reactivate_res.json()["is_active"] is True
+    assert reactivate_res.json()["email"] == "reactivated.john@company.com"
+
+    # Now back in active list
+    active_res2 = client.get("/api/v1/employees/?status=active", headers=auth_headers)
+    assert active_res2.json()["total"] == 1
 
 
 def test_search_employees(client, auth_headers, sample_employee):

@@ -54,8 +54,17 @@ def get_monthly_payroll_summary(employee, year: int, month: int):
             duration_hrs = 0
             if att.check_in and att.check_out:
                 t1 = datetime.combine(curr_date, att.check_in)
-                t2 = datetime.combine(curr_date, att.check_out)
-                duration_hrs = round((t2 - t1).total_seconds() / 3600.0, 2)
+                if att.check_out < att.check_in:
+                    t2 = datetime.combine(curr_date + timedelta(days=1), att.check_out)
+                else:
+                    t2 = datetime.combine(curr_date, att.check_out)
+                gap_hrs = 0.0
+                if att.permission_out and att.permission_in:
+                    p1 = datetime.combine(curr_date, att.permission_out)
+                    p2 = datetime.combine(curr_date, att.permission_in)
+                    if p2 > p1:
+                        gap_hrs = (p2 - p1).total_seconds() / 3600.0
+                duration_hrs = round(max(0.0, (t2 - t1).total_seconds() / 3600.0 - gap_hrs), 2)
                 if duration_hrs < 5.0 and att.status != 'LATE':
                     half_day_count += 1
 
@@ -64,6 +73,8 @@ def get_monthly_payroll_summary(employee, year: int, month: int):
                 "day_name": curr_date.strftime("%a"),
                 "check_in": att.check_in.strftime("%I:%M %p") if att.check_in else None,
                 "check_out": att.check_out.strftime("%I:%M %p") if att.check_out else None,
+                "permission_out": att.permission_out.strftime("%I:%M %p") if att.permission_out else None,
+                "permission_in": att.permission_in.strftime("%I:%M %p") if att.permission_in else None,
                 "status": att.status,
                 "duration_hours": duration_hrs,
                 "distance_m": round(att.distance_meters, 1) if att.distance_meters else 0

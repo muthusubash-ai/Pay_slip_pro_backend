@@ -330,8 +330,17 @@ def get_monthly_attendance(
             is_late = bio.status == 'LATE'
             if bio.check_in and bio.check_out:
                 t1 = datetime.combine(d, bio.check_in)
-                t2 = datetime.combine(d, bio.check_out)
-                duration_hrs = round(max(0.0, (t2 - t1).total_seconds() / 3600.0), 2)
+                if bio.check_out < bio.check_in:
+                    t2 = datetime.combine(d + timedelta(days=1), bio.check_out)
+                else:
+                    t2 = datetime.combine(d, bio.check_out)
+                gap_hrs = 0.0
+                if bio.permission_out and bio.permission_in:
+                    p1 = datetime.combine(d, bio.permission_out)
+                    p2 = datetime.combine(d, bio.permission_in)
+                    if p2 > p1:
+                        gap_hrs = (p2 - p1).total_seconds() / 3600.0
+                duration_hrs = round(max(0.0, (t2 - t1).total_seconds() / 3600.0 - gap_hrs), 2)
 
         results.append({
             "id": rec_id,
@@ -342,6 +351,9 @@ def get_monthly_attendance(
             "check_out": check_out_str,
             "duration_hours": duration_hrs,
             "is_late": is_late,
+            "bio_record_id": bio.id if bio else None,
+            "permission_out": bio.permission_out.strftime("%I:%M %p") if (bio and bio.permission_out) else None,
+            "permission_in": bio.permission_in.strftime("%I:%M %p") if (bio and bio.permission_in) else None,
             "biometric_status": bio.status if bio else None,
             "leave_type": leave.request_type if leave else None,
             "distance_meters": round(bio.distance_meters, 1) if (bio and bio.distance_meters is not None) else None,

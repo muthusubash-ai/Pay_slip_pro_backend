@@ -46,7 +46,11 @@ urlpatterns = [
     path("api/v1/employees/<int:employee_id>/", views.EmployeeViews.employee_detail, name="employee_detail_slash"),
     path("api/v1/employees/<int:employee_id>/send-invite", views.EmployeeViews.send_invite, name="employee_send_invite"),
     path("api/v1/employees/<int:employee_id>/send-invite/", views.EmployeeViews.send_invite, name="employee_send_invite_slash"),
-    
+    path("api/v1/employees/<int:employee_id>/reactivate", views.EmployeeViews.reactivate_employee, name="employee_reactivate"),
+    path("api/v1/employees/<int:employee_id>/reactivate/", views.EmployeeViews.reactivate_employee, name="employee_reactivate_slash"),
+    path("api/v1/employees/<int:employee_id>/permanent", views.EmployeeViews.permanent_delete_employee, name="employee_permanent_delete"),
+    path("api/v1/employees/<int:employee_id>/permanent/", views.EmployeeViews.permanent_delete_employee, name="employee_permanent_delete_slash"),
+
     # Custom Salary Slip Routes
     path("api/v1/salary-slips/", views.SalarySlipViews.salary_slip_list, name="salary_slip_list"),
     path("api/v1/salary-slips/generate", views.SalarySlipViews.generate_slips, name="generate_slips"),

@@ -78,6 +78,16 @@ class Attendance(models.Model):
     punch_longitude = models.FloatField()
     distance_meters = models.FloatField()
     verification_photo = models.ImageField(upload_to="attendance/punches/%Y/%m/%d/", null=True, blank=True)
+    # Set once a "missed punch-out" HR notification + email has been sent for this
+    # record, so the lazy detection check (no cron in this project) never sends it
+    # twice. Cleared implicitly once check_out is filled in (no further checks match).
+    missed_checkout_notified_at = models.DateTimeField(null=True, blank=True)
+    # A temporary step-out during the day under an APPROVED permission request (e.g.
+    # "2 hour permission") - the employee punches out at permission_out, then punches
+    # back in at permission_in once their permission time is up, and the day's single
+    # check_in/check_out continue to bound the whole day as before.
+    permission_out = models.TimeField(null=True, blank=True)
+    permission_in = models.TimeField(null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
     updated_at = models.DateTimeField(auto_now=True)
 

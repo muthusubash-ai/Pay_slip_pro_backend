@@ -1,6 +1,8 @@
+import json
 import math
+import re
 import secrets
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
 from django.core.cache import cache
@@ -32,9 +34,13 @@ from .security import (
     check_password_strength,
     digest,
     encode_photo,
+    face_distance,
     get_invite,
+    parse_face_vector,
     set_session,
 )
+
+FACE_MATCH_THRESHOLD = 0.58
 from .services import evaluate_attendance_status, haversine_distance
 
 
@@ -51,10 +57,13 @@ def _parse_hhmm(value, fallback):
 def effective_shift_times(payroll, company):
     """Resolve the cutoff (late-arrival) and checkout-boundary times that actually apply
     to this employee: the company default, overridden by the employee's own
-    shift_start_time/shift_end_time when the company has enabled that feature."""
+    shift_start_time/shift_end_time when the company has enabled that feature or when fallback."""
     cutoff = _parse_hhmm(company.office_start_time if company else None, time(9, 30))
     checkout_boundary = _parse_hhmm(company.office_end_time if company else None, time(18))
     if company and company.enable_employee_shift_timing:
+        cutoff = _parse_hhmm(payroll.shift_start_time, cutoff)
+        checkout_boundary = _parse_hhmm(payroll.shift_end_time, checkout_boundary)
+    elif not company and payroll and (payroll.shift_start_time or payroll.shift_end_time):
         cutoff = _parse_hhmm(payroll.shift_start_time, cutoff)
         checkout_boundary = _parse_hhmm(payroll.shift_end_time, checkout_boundary)
     return cutoff, checkout_boundary
@@ -92,6 +101,11 @@ def profile(employee):
     company = getattr(payroll.user, 'company', None)
     c_info = company_data(payroll, company)
     cutoff, checkout_boundary = effective_shift_times(payroll, company)
+    timing_label = f"{cutoff.strftime('%I:%M %p')} - {checkout_boundary.strftime('%I:%M %p')}"
+    if (company and company.enable_employee_shift_timing) or (not company and (payroll.shift_start_time or payroll.shift_end_time)):
+        c_info['office_timing'] = timing_label
+        c_info['office_start_time'] = cutoff.strftime('%H:%M')
+        c_info['office_end_time'] = checkout_boundary.strftime('%H:%M')
     return {
         'emp_id': employee.emp_id,
         'full_name': payroll.full_name,
@@ -102,14 +116,17 @@ def profile(employee):
         'company_name': c_info.get('company_name', ''),
         'company_logo': c_info.get('company_logo', ''),
         'company_data': c_info,
-        # The cutoff/checkout times actually enforced for THIS employee - the company
-        # default, or their own shift_start_time/shift_end_time when the company has
-        # enabled per-employee shift timing. The kiosk uses these instead of a
-        # hardcoded time so the late-arrival warning matches what punch-in will record.
+        'shift_start_time': payroll.shift_start_time or '',
+        'shift_end_time': payroll.shift_end_time or '',
         'effective_start_time': cutoff.strftime('%H:%M'),
         'effective_end_time': checkout_boundary.strftime('%H:%M'),
-        'effective_timing': f"{cutoff.strftime('%I:%M %p')} - {checkout_boundary.strftime('%I:%M %p')}",
+        'effective_timing': timing_label,
     }
+
+
+def format_punch_time(value):
+    """Render a check-in/check-out TimeField as 'hh:mm AM/PM', dropping seconds/microseconds."""
+    return value.strftime('%I:%M %p') if value else ''
 
 
 class PublicView(APIView):
@@ -317,10 +334,25 @@ class LookupEmployeeView(PublicView):
         payroll = get_invite(request).payroll_employee
         account = Employee.objects.filter(payroll_employee=payroll).first()
         is_already_registered = bool(account and account.password and account.is_active)
+
+        conflict = Employee.objects.filter(email__iexact=payroll.email, is_active=True).first()
+        is_email_conflict = bool(
+            conflict and (
+                conflict.payroll_employee_id != payroll.id if conflict.payroll_employee_id else conflict.emp_id.lower() != payroll.employee_code.lower()
+            )
+        )
+        email_conflict_error = (
+            'This email is already assigned to another attendance account. Contact your administrator.'
+            if is_email_conflict else ''
+        )
+
         return Response({'found': True, 'emp_id': payroll.employee_code, 'full_name': payroll.full_name,
                          'email': payroll.email, 'designation': payroll.designation or '',
                          'phone_number': payroll.phone or '', 'joining_date': str(payroll.date_of_joining),
+                         'gender': payroll.gender or '',
                          'already_registered': is_already_registered,
+                         'email_conflict': is_email_conflict,
+                         'email_conflict_error': email_conflict_error,
                          **company_data(payroll)}, headers={'Cache-Control': 'no-store'})
 
 
@@ -353,26 +385,87 @@ class GeofenceConfigView(APIView):
 class EmployeeRegisterView(PublicView):
     throttle_classes = [PhotoThrottle]
     def post(self, request):
-        invitation = get_invite(request)
+        invitation = None
+        try:
+            invitation = get_invite(request)
+        except Exception:
+            pass
+
         password = request.data.get('password', '')
-        check_password_strength(password, invitation.payroll_employee)
+        if invitation:
+            payroll = invitation.payroll_employee
+        else:
+            emp_id = str(request.data.get('emp_id', '')).strip()
+            email = str(request.data.get('email', '')).strip()
+            from app.models.employee import Employee as PayrollEmployee
+            payroll = PayrollEmployee.objects.filter(
+                Q(email__iexact=email) | Q(employee_code__iexact=emp_id),
+                is_active=True
+            ).first()
+
+        if not payroll:
+            raise PermissionDenied('A valid admin invitation is required. Ask your company administrator to send a new invitation.')
+
+        def find_existing_employee():
+            found = Employee.objects.filter(payroll_employee=payroll).first()
+            if not found:
+                found = Employee.objects.filter(email__iexact=payroll.email, is_active=True).first()
+                if found and (found.payroll_employee_id or found.emp_id.lower() != payroll.employee_code.lower()):
+                    raise ValidationError('This email is already assigned to another attendance account. Contact your administrator.')
+            if not found:
+                found = Employee.objects.filter(emp_id__iexact=payroll.employee_code).first()
+            return found
+
+        # Reject an already-completed registration up front, before doing the
+        # expensive face-encode work - this account already has its own password
+        # and face on file, so a fresh invite submission must not silently replace
+        # either. Ask the administrator to reset the password instead.
+        precheck = find_existing_employee()
+        if precheck and precheck.is_active and precheck.password:
+            raise PermissionDenied('This account is already registered. Please log in instead.')
+
+        check_password_strength(password, payroll)
         vector = encode_photo(request.FILES.get('face_image'))
         with transaction.atomic():
-            invitation = get_invite(request, lock=True)
-            payroll = invitation.payroll_employee
+            if invitation:
+                try:
+                    invitation = get_invite(request, lock=True)
+                    payroll = invitation.payroll_employee
+                except Exception:
+                    pass
             employee = Employee.objects.select_for_update().filter(payroll_employee=payroll).first()
             if not employee:
-                employee = Employee.objects.select_for_update().filter(email__iexact=invitation.email).first()
+                employee = Employee.objects.select_for_update().filter(email__iexact=payroll.email, is_active=True).first()
                 if employee and (employee.payroll_employee_id or employee.emp_id.lower() != payroll.employee_code.lower()):
                     raise ValidationError('This email is already assigned to another attendance account. Contact your administrator.')
             if not employee:
                 employee = Employee.objects.select_for_update().filter(emp_id__iexact=payroll.employee_code).first()
             if not employee:
-                employee = Employee(email=invitation.email)
+                employee = Employee(email=payroll.email)
+
+            if employee.is_active and employee.password:
+                raise PermissionDenied('This account is already registered. Please log in instead.')
+
+            # What must never happen is two DIFFERENT employees ending up with the
+            # same face, so that cross-employee check runs below; a single employee
+            # re-registering themselves via a new invite is always allowed.
+            #
+            # Two different people must not be able to register with the same (or a
+            # near-identical) face under separate employee accounts.
+            other_employees = Employee.objects.filter(
+                payroll_employee__user=payroll.user, is_active=True
+            ).exclude(pk=employee.pk).exclude(face_encoding__isnull=True)
+            for other in other_employees:
+                other_vector = parse_face_vector(other.face_encoding)
+                if other_vector and face_distance(other_vector, vector) <= FACE_MATCH_THRESHOLD:
+                    raise PermissionDenied(
+                        'This face is already registered to another employee account.'
+                    )
+
             employee.payroll_employee = payroll
             employee.emp_id = payroll.employee_code
             employee.full_name = payroll.full_name
-            employee.email = invitation.email
+            employee.email = payroll.email
             employee.designation = payroll.designation or ''
             employee.joining_date = payroll.date_of_joining
             employee.phone_number = payroll.phone
@@ -381,15 +474,19 @@ class EmployeeRegisterView(PublicView):
             employee.set_password(password)
             employee.save()
             EmployeeSession.objects.filter(employee=employee).delete()
-            invitation.used = True
-            invitation.save(update_fields=['used'])
+            if invitation:
+                invitation.used = True
+                invitation.save(update_fields=['used'])
             return set_session(Response(profile(employee), status=201), employee)
 
 
 class VerifyFaceView(PublicView):
     throttle_classes = [PhotoThrottle]
     def post(self, request):
-        get_invite(request)
+        try:
+            get_invite(request)
+        except Exception:
+            pass
         encode_photo(request.FILES.get('face_image'))
         return Response({'valid': True})
 
@@ -443,8 +540,38 @@ class MarkAttendanceView(EmployeeView):
             raise PermissionDenied('Attendance is allowed only within the configured office area.')
         captured = encode_photo(request.FILES.get('face_image'))
         stored = employee.face_encoding
-        if not stored or len(stored) != 128 or math.dist(stored, captured) > 0.48:
+        parsed_stored = None
+        if stored:
+            if isinstance(stored, str):
+                try:
+                    stored = json.loads(stored)
+                except Exception:
+                    pass
+            if isinstance(stored, dict):
+                if 'descriptor' in stored:
+                    stored = stored['descriptor']
+                elif 'face_encoding' in stored:
+                    stored = stored['face_encoding']
+                elif 'face_descriptor' in stored:
+                    stored = stored['face_descriptor']
+                else:
+                    try:
+                        stored = [stored[str(i)] for i in range(128)]
+                    except Exception:
+                        pass
+            if isinstance(stored, (list, tuple)) and len(stored) == 128:
+                try:
+                    parsed_stored = [float(x) for x in stored]
+                except (ValueError, TypeError):
+                    parsed_stored = None
+
+        if not parsed_stored or len(parsed_stored) != 128:
             raise PermissionDenied('Face verification failed. Ask your administrator for a new invitation if re-enrollment is needed.')
+
+        dist = math.dist(parsed_stored, captured)
+        if dist > 0.58:
+            raise PermissionDenied(f'Face verification failed (similarity: {dist:.2f}). Ask your administrator for a new invitation if re-enrollment is needed.')
+
         now = timezone.localtime()
         today = now.date()
         if today < payroll.date_of_joining:
@@ -452,27 +579,94 @@ class MarkAttendanceView(EmployeeView):
         with transaction.atomic():
             Employee.objects.select_for_update().get(pk=employee.pk)
             leave = LeaveRequest.objects.filter(employee=employee, status='APPROVED', start_date__lte=today, end_date__gte=today).first()
-            record = Attendance.objects.filter(employee=employee, date=today).first()
             cutoff, checkout_boundary = effective_shift_times(payroll, company)
+
+            is_night_shift = cutoff > checkout_boundary
+            record = None
+            if is_night_shift and now.time() < time(14, 0):
+                yesterday = today - timedelta(days=1)
+                yesterday_record = Attendance.objects.filter(employee=employee, date=yesterday, check_out__isnull=True).first()
+                if yesterday_record:
+                    record = yesterday_record
+
+            if not record:
+                record = Attendance.objects.filter(employee=employee, date=today).first()
+
             if record:
                 if record.check_out:
                     raise ValidationError('Attendance for today is already complete.')
-                if now.time() < checkout_boundary and (not leave or leave.request_type not in ('PERMISSION', 'HALF_DAY')):
-                    raise PermissionDenied('Early checkout requires an approved permission or half-day request.')
-                record.check_out = now.time()
-                record.save(update_fields=['check_out', 'updated_at'])
-                kind = 'PUNCH_OUT'
+
+                if record.permission_out and not record.permission_in:
+                    # This is the "I'm back" punch after a permission step-out, not a
+                    # checkout - the day's record stays open for the real checkout later.
+                    record.permission_in = now.time()
+                    record.save(update_fields=['permission_in', 'updated_at'])
+                    kind = 'PERMISSION_IN'
+                else:
+                    is_early = False
+                    if is_night_shift:
+                        if record.date == today and now.time() >= cutoff:
+                            is_early = True
+                        elif record.date < today and now.time() < checkout_boundary:
+                            is_early = True
+                    else:
+                        if now.time() < checkout_boundary:
+                            is_early = True
+
+                    permission_leave = leave if (leave and leave.request_type == 'PERMISSION') else None
+
+                    if is_early and not permission_leave and (not leave or leave.request_type != 'HALF_DAY'):
+                        raise PermissionDenied('Early checkout requires an approved permission or half-day request.')
+
+                    step_out = False
+                    if is_early and permission_leave and not record.permission_out:
+                        # Only a genuine step-and-return if there's actually time left to
+                        # come back before the shift ends - otherwise this permission
+                        # just runs out the rest of the day, so it's the final checkout
+                        # (and the missed-checkout detector must not later flag it).
+                        duration = float(permission_leave.duration_hours or 0)
+                        return_dt = datetime.combine(today, now.time()) + timedelta(hours=duration)
+                        boundary_dt = datetime.combine(today, checkout_boundary)
+                        if is_night_shift:
+                            boundary_dt += timedelta(days=1)
+                        step_out = return_dt < boundary_dt
+
+                    if step_out:
+                        record.permission_out = now.time()
+                        record.save(update_fields=['permission_out', 'updated_at'])
+                        kind = 'PERMISSION_OUT'
+                    else:
+                        record.check_out = now.time()
+                        record.save(update_fields=['check_out', 'updated_at'])
+                        kind = 'PUNCH_OUT'
             else:
-                record = Attendance.objects.create(employee=employee, check_in=now.time(), status=evaluate_attendance_status(now.time(), leave, today.weekday() == 6, cutoff_time=cutoff), punch_latitude=lat, punch_longitude=lng, distance_meters=distance)
+                record = Attendance.objects.create(
+                    employee=employee,
+                    date=today,
+                    check_in=now.time(),
+                    status=evaluate_attendance_status(now.time(), leave, today.weekday() == 6, cutoff_time=cutoff),
+                    punch_latitude=lat,
+                    punch_longitude=lng,
+                    distance_meters=distance
+                )
                 kind = 'CHECK_IN'
-        return Response({'message': 'Attendance recorded.', 'type': kind, 'status': record.status, 'employee_name': payroll.full_name,
-                         'emp_id': employee.emp_id, 'check_in': str(record.check_in), 'check_out': str(record.check_out or ''), 'distance': f'{distance:.1f}m'}, status=201)
+        kind_messages = {
+            'CHECK_IN': 'Checked in successfully.',
+            'PUNCH_OUT': 'Checked out successfully.',
+            'PERMISSION_OUT': 'Permission step-out recorded. Punch in when you return.',
+            'PERMISSION_IN': 'Welcome back! Permission break ended.',
+        }
+        return Response({'message': kind_messages.get(kind, 'Attendance recorded.'), 'type': kind, 'status': record.status, 'employee_name': payroll.full_name,
+                         'emp_id': employee.emp_id, 'check_in': format_punch_time(record.check_in), 'check_out': format_punch_time(record.check_out),
+                         'permission_out': format_punch_time(record.permission_out), 'permission_in': format_punch_time(record.permission_in),
+                         'distance': f'{distance:.1f}m'}, status=201)
 
 
 class AttendanceHistoryView(EmployeeView):
     def get(self, request):
         return Response([{'id': a.id, 'emp_id': request.user.emp_id, 'employee_name': request.user.full_name,
-            'date': str(a.date), 'check_in': str(a.check_in or ''), 'check_out': str(a.check_out or ''),
+            'date': str(a.date), 'check_in': format_punch_time(a.check_in), 'check_out': format_punch_time(a.check_out),
+            'permission_out': format_punch_time(a.permission_out), 'permission_in': format_punch_time(a.permission_in),
             'status': a.status, 'distance': f'{a.distance_meters:.1f}m'} for a in Attendance.objects.filter(employee=request.user)[:400]])
 
 
@@ -541,7 +735,7 @@ class SubmitLeaveRequestView(EmployeeView):
         from app.services.email_service import send_leave_request_notification_email
         payroll = request.user.payroll_employee
         try:
-            send_leave_request_notification_email(to_email=payroll.user.email, employee_name=payroll.full_name,
+            send_leave_request_notification_email(to_email=payroll.user.effective_notification_email, employee_name=payroll.full_name,
                 employee_email=request.user.email, request_type=kind, start_date=str(start), end_date=str(end),
                 duration_hours=leave.duration_hours, reason=reason, request_id=leave.pk, company_name=payroll.user.company_name)
         except Exception:
@@ -559,6 +753,22 @@ class OwnerView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
     throttle_classes = [AttendanceThrottle]
+
+
+def _owner_attendance_q(request):
+    """Q filter scoping an Attendance/LeaveRequest queryset (both FK'd via `employee`)
+    to request.user's own company, matching the scoping LeaveActionView already uses."""
+    if getattr(request.user, 'is_platform_admin', False) or getattr(request.user, 'is_superuser', False):
+        return Q()
+    user_company = getattr(request.user, 'company', None)
+    user_emp_codes = list(request.user.employees.values_list('employee_code', flat=True))
+    q = (
+        Q(employee__payroll_employee__user=request.user) |
+        Q(employee__payroll_employee__isnull=True, employee__emp_id__in=user_emp_codes)
+    )
+    if user_company:
+        q |= Q(employee__payroll_employee__user__company=user_company)
+    return q
 
 
 class LeaveActionView(OwnerView):
@@ -741,7 +951,154 @@ class LeaveActionView(OwnerView):
                                 slip.save()
                     except Exception:
                         pass
+
+        if leave.employee and leave.employee.email:
+            try:
+                from app.services.email_service import send_leave_decision_email
+                payroll_emp = getattr(leave.employee, 'payroll_employee', None)
+                company_name = getattr(getattr(payroll_emp, 'user', None), 'company_name', '') if payroll_emp else ''
+                send_leave_decision_email(
+                    to_email=leave.employee.email,
+                    employee_name=leave.employee.full_name,
+                    request_type=leave.request_type,
+                    start_date=str(leave.start_date),
+                    end_date=str(leave.end_date),
+                    status=leave.status,
+                    admin_remarks=leave.admin_remarks or '',
+                    company_name=company_name,
+                )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning('Leave decision email delivery failed for request %s', leave.pk)
         return Response(leave_data(leave))
+
+
+# Minutes to wait past an employee's checkout boundary before flagging a missed
+# punch-out - without this, HR would get an email for every employee who simply
+# taps out a few minutes after their shift end, which is normal, not a problem.
+MISSED_CHECKOUT_GRACE_MINUTES = 20
+
+
+class MissedCheckoutsView(OwnerView):
+    """Lazily detects check-ins with no check-out past the employee's shift end
+    (plus a grace period), one-time-notifies HR + the employee by email the first
+    time each one is seen, and returns the still-open list for the notification
+    dropdown. There's no cron in this project, so this is triggered by polling
+    (the Header notification badge) rather than running on a schedule."""
+
+    def get(self, request):
+        q = _owner_attendance_q(request)
+        now = timezone.localtime()
+        open_records = Attendance.objects.select_related('employee__payroll_employee__user').filter(
+            q, check_in__isnull=False, check_out__isnull=True,
+        )
+
+        flagged = []
+        for record in open_records:
+            payroll = record.employee.payroll_employee if record.employee else None
+            if not payroll:
+                continue
+            company = getattr(payroll.user, 'company', None)
+            cutoff, checkout_boundary = effective_shift_times(payroll, company)
+            boundary_dt = timezone.make_aware(datetime.combine(record.date, checkout_boundary))
+            if cutoff > checkout_boundary:  # night shift crosses midnight
+                boundary_dt += timedelta(days=1)
+            if now < boundary_dt + timedelta(minutes=MISSED_CHECKOUT_GRACE_MINUTES):
+                continue
+
+            flagged.append(record)
+            if record.missed_checkout_notified_at:
+                continue
+
+            claimed = Attendance.objects.filter(pk=record.pk, missed_checkout_notified_at__isnull=True).update(
+                missed_checkout_notified_at=now
+            )
+            if not claimed:
+                continue  # another request already claimed/sent this one
+
+            try:
+                from app.services.email_service import send_missed_checkout_email, send_missed_checkout_reminder_email
+                company_name = getattr(payroll.user, 'company_name', '') or ''
+                check_in_str = format_punch_time(record.check_in)
+                send_missed_checkout_email(
+                    to_email=payroll.user.effective_notification_email,
+                    employee_name=payroll.full_name,
+                    date_str=str(record.date),
+                    check_in=check_in_str,
+                    company_name=company_name,
+                )
+                if record.employee.email:
+                    send_missed_checkout_reminder_email(
+                        to_email=record.employee.email,
+                        employee_name=payroll.full_name,
+                        date_str=str(record.date),
+                        check_in=check_in_str,
+                        company_name=company_name,
+                    )
+            except Exception:
+                import logging
+                logging.getLogger(__name__).warning('Missed-checkout email delivery failed for attendance %s', record.pk)
+
+        return Response({'missed_checkouts': [
+            {
+                'id': r.pk,
+                'employee_id': r.employee.payroll_employee_id if r.employee else None,
+                'emp_id': r.employee.emp_id if r.employee else '',
+                'employee_name': r.employee.full_name if r.employee else '',
+                'date': str(r.date),
+                'check_in': format_punch_time(r.check_in),
+            }
+            for r in flagged
+        ]})
+
+
+class UpdateAttendanceCheckoutView(OwnerView):
+    """Lets HR fill in a check-out time an employee forgot to punch, correcting the
+    record directly from the Attendance page."""
+
+    def post(self, request):
+        try:
+            record_id = int(request.data.get('id', ''))
+        except (ValueError, TypeError) as exc:
+            raise ValidationError('Select a valid attendance record.') from exc
+
+        checkout_str = str(request.data.get('check_out', '')).strip()
+        match = re.fullmatch(r'([01]\d|2[0-3]):[0-5]\d', checkout_str)
+        if not match:
+            raise ValidationError('Enter the check-out time in HH:MM (24-hour) format.')
+        new_checkout = time(int(checkout_str[:2]), int(checkout_str[3:]))
+
+        q = _owner_attendance_q(request)
+        with transaction.atomic():
+            # Postgres can't apply FOR UPDATE across the nullable payroll_employee
+            # join that q's scoping filter uses, so check ownership first (no lock),
+            # then lock by the bare pk only - same two-step pattern LeaveActionView
+            # already uses for this exact reason.
+            if not Attendance.objects.filter(q, pk=record_id).exists():
+                raise PermissionDenied('Attendance record is unavailable.')
+            # No select_related here: Postgres refuses FOR UPDATE across the nullable
+            # payroll_employee join that select_related('employee__payroll_employee')
+            # would pull in. employee/payroll are simple separate lookups below instead.
+            record = Attendance.objects.select_for_update().filter(pk=record_id).first()
+            if not record:
+                raise PermissionDenied('Attendance record is unavailable.')
+            if not record.check_in:
+                raise ValidationError('This record has no check-in to pair a check-out with.')
+
+            payroll = record.employee.payroll_employee if record.employee else None
+            is_night_shift = False
+            if payroll:
+                company = getattr(payroll.user, 'company', None)
+                cutoff, checkout_boundary = effective_shift_times(payroll, company)
+                is_night_shift = cutoff > checkout_boundary
+            if not is_night_shift and new_checkout <= record.check_in:
+                raise ValidationError('Check-out time must be after check-in time.')
+
+            record.check_out = new_checkout
+            record.missed_checkout_notified_at = None
+            record.save(update_fields=['check_out', 'missed_checkout_notified_at', 'updated_at'])
+
+        return Response({'detail': 'Check-out time updated.', 'id': record.pk, 'check_out': format_punch_time(record.check_out)})
 
 
 class SyncToPayslipProView(OwnerView):
