@@ -9,9 +9,23 @@ from pathlib import Path
 
 def main():
     """Run administrative tasks."""
-    venv_site = Path(__file__).resolve().parent / ".venv" / "Lib" / "site-packages"
-    if venv_site.exists() and str(venv_site) not in sys.path:
-        sys.path.insert(0, str(venv_site))
+    base_dir = Path(__file__).resolve().parent
+    venv_python = base_dir / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    # Splicing the venv's site-packages onto whichever "python" happens to be
+    # on PATH only works when that python's ABI matches the venv's - otherwise
+    # compiled extensions (e.g. Pillow's _imaging) fail to import. Fail loudly
+    # instead of silently mixing interpreters.
+    if (
+        venv_python.exists()
+        and Path(sys.executable).resolve() != venv_python.resolve()
+    ):
+        sys.exit(
+            f"Wrong Python interpreter: this is running under {sys.executable},\n"
+            f"but the project's virtual environment is {venv_python}.\n"
+            "Activate it first:\n"
+            "  PowerShell:  .venv\\Scripts\\Activate.ps1\n"
+            "  bash:        source .venv/Scripts/activate"
+        )
 
     os.environ.setdefault("DJANGO_SETTINGS_MODULE", "app.settings")
     try:
