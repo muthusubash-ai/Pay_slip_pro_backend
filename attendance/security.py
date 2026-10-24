@@ -198,6 +198,8 @@ def encode_photo(upload):
         import face_recognition
         import numpy as np
     except (ImportError, SystemExit) as exc:
+        import logging
+        logging.getLogger(__name__).exception("Secure face verification dependency error: %s", exc)
         raise BiometricUnavailable() from exc
     array = np.array(img)
     locations = face_recognition.face_locations(array, number_of_times_to_upsample=1, model='hog')

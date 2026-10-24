@@ -6,7 +6,7 @@ from datetime import date, datetime, time, timedelta
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 from rest_framework.exceptions import (
@@ -640,16 +640,25 @@ class MarkAttendanceView(EmployeeView):
                         record.save(update_fields=['check_out', 'updated_at'])
                         kind = 'PUNCH_OUT'
             else:
-                record = Attendance.objects.create(
-                    employee=employee,
-                    date=today,
-                    check_in=now.time(),
-                    status=evaluate_attendance_status(now.time(), leave, today.weekday() == 6, cutoff_time=cutoff),
-                    punch_latitude=lat,
-                    punch_longitude=lng,
-                    distance_meters=distance
-                )
-                kind = 'CHECK_IN'
+                try:
+                    record = Attendance.objects.create(
+                        employee=employee,
+                        date=today,
+                        check_in=now.time(),
+                        status=evaluate_attendance_status(now.time(), leave, today.weekday() == 6, cutoff_time=cutoff),
+                        punch_latitude=lat,
+                        punch_longitude=lng,
+                        distance_meters=distance
+                    )
+                    kind = 'CHECK_IN'
+                except IntegrityError:
+                    # A concurrent request for this same employee/day already created
+                    # the row between our lookup above and this insert - re-fetch it
+                    # instead of surfacing a raw 500 to the kiosk.
+                    record = Attendance.objects.filter(employee=employee, date=today).first()
+                    if not record:
+                        raise
+                    raise ValidationError('Attendance for today is already recorded. Please retry.')
         kind_messages = {
             'CHECK_IN': 'Checked in successfully.',
             'PUNCH_OUT': 'Checked out successfully.',
