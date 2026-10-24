@@ -32,9 +32,14 @@ echo "[2/6] Installing system build dependencies for dlib/face_recognition..."
 # face_recognition requires compiling dlib from source on most Linux hosts since
 # there is no universal prebuilt wheel - without cmake/a C++ compiler this pip
 # install silently fails (or crashes mid-build on low-RAM VPS boxes) and every
-# face-related endpoint then 503s for every employee at runtime.
+# face-related endpoint then 503s for every employee at runtime. Modern dlib
+# (19.19+) builds its own bindings via CMake + pybind11 and does not need Boost.
+if [ "$(swapon --show | wc -l)" -eq 0 ]; then
+    echo "WARNING: No swap detected. Compiling dlib from source is memory-heavy and" \
+         "can be OOM-killed on a 1 vCPU/4GB VPS without swap (see DEPLOYMENT_HOSTINGER_KVM1.md Phase 1.2)."
+fi
 apt-get update -y
-apt-get install -y --no-install-recommends cmake build-essential libboost-all-dev
+apt-get install -y --no-install-recommends cmake build-essential python3-dev
 
 echo "[2/6] Updating Python backend dependencies..."
 cd "${BACKEND_DIR}"
