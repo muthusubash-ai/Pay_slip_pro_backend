@@ -1,0 +1,35 @@
+[Unit]
+Description=PaySlipPro Gunicorn Daemon (Salary Slip Management)
+After=network.target postgresql.service
+
+[Service]
+Type=notify
+User=www-data
+Group=www-data
+WorkingDirectory=/var/www/payslippro/backend
+EnvironmentFile=/var/www/payslippro/backend/.env
+
+# Gunicorn configuration optimized for Hostinger KVM 1 (1 vCPU, 4GB RAM)
+# 3 workers (2 * 1 vCPU + 1), gthread worker class, socket communication
+ExecStart=/var/www/payslippro/backend/.venv/bin/gunicorn \
+    --workers 3 \
+    --threads 2 \
+    --worker-class gthread \
+    --worker-tmp-dir /dev/shm \
+    --timeout 60 \
+    --max-requests 1000 \
+    --max-requests-jitter 100 \
+    --bind unix:/run/payslippro.sock \
+    --access-logfile /var/www/payslippro/backend/logs/gunicorn_access.log \
+    --error-logfile /var/www/payslippro/backend/logs/gunicorn_error.log \
+    app.wsgi:application
+
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
