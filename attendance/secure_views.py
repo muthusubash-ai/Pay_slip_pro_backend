@@ -336,7 +336,7 @@ class LookupEmployeeView(PublicView):
     def get(self, request):
         payroll = get_invite(request).payroll_employee
         account = Employee.objects.filter(payroll_employee=payroll).first()
-        is_already_registered = bool(account and account.password and account.is_active)
+        is_already_registered = bool(account and account.password and account.face_encoding and account.is_active)
 
         conflict = Employee.objects.filter(email__iexact=payroll.email, is_active=True).first()
         is_email_conflict = bool(
@@ -419,12 +419,9 @@ class EmployeeRegisterView(PublicView):
                 found = Employee.objects.filter(emp_id__iexact=payroll.employee_code).first()
             return found
 
-        # Reject an already-completed registration up front, before doing the
-        # expensive face-encode work - this account already has its own password
-        # and face on file, so a fresh invite submission must not silently replace
-        # either. Ask the administrator to reset the password instead.
+        # Reject duplicate registration without an invitation only if account already has both password AND face:
         precheck = find_existing_employee()
-        if precheck and precheck.is_active and precheck.password:
+        if not invitation and precheck and precheck.is_active and precheck.password and precheck.face_encoding:
             raise PermissionDenied('This account is already registered. Please log in instead.')
 
         check_password_strength(password, payroll)
@@ -446,7 +443,7 @@ class EmployeeRegisterView(PublicView):
             if not employee:
                 employee = Employee(email=payroll.email)
 
-            if employee.is_active and employee.password:
+            if not invitation and employee.is_active and employee.password and employee.face_encoding:
                 raise PermissionDenied('This account is already registered. Please log in instead.')
 
             # What must never happen is two DIFFERENT employees ending up with the
