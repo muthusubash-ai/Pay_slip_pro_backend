@@ -40,7 +40,7 @@ from .security import (
     set_session,
 )
 
-FACE_MATCH_THRESHOLD = 0.60
+FACE_MATCH_THRESHOLD = 0.58
 from .services import evaluate_attendance_status, haversine_distance
 
 
@@ -111,7 +111,10 @@ def profile(employee):
         'full_name': payroll.full_name,
         'email': employee.email,
         'designation': payroll.designation or '',
-        'phone_number': employee.phone_number or '',
+        # Payroll is the source of truth, matching full_name/designation/joining_date
+        # above - the kiosk's own copy (set at registration, or via UpdateProfileView)
+        # is only a fallback for when HR hasn't recorded a phone number in payroll yet.
+        'phone_number': payroll.phone or employee.phone_number or '',
         'joining_date': str(payroll.date_of_joining),
         'company_name': c_info.get('company_name', ''),
         'company_logo': c_info.get('company_logo', ''),

@@ -483,6 +483,34 @@ def test_mark_attendance_uses_employee_shift_cutoff_only_when_company_enables_it
     assert response2.data['status'] == 'PRESENT'
 
 
+def test_profile_phone_number_reflects_live_payroll_value(accounts):
+    """The kiosk profile's phone_number must track payroll's phone live (like
+    full_name/designation/joining_date already do), not the kiosk's own stale
+    copy from registration time - otherwise an HR edit in the main app never
+    reaches the employee's own Biometric Portal profile view."""
+    owner, payroll, employee = accounts[0]
+    payroll.phone = '9000000000'
+    payroll.save(update_fields=['phone'])
+    employee.phone_number = '1111111111'
+    employee.save(update_fields=['phone_number'])
+
+    client = session_client(employee)
+    response = client.get(PREFIX + 'me/')
+    assert response.status_code == 200
+    assert response.data['phone_number'] == '9000000000'
+
+    payroll.phone = '8888888888'
+    payroll.save(update_fields=['phone'])
+    response2 = client.get(PREFIX + 'me/')
+    assert response2.data['phone_number'] == '8888888888'
+
+    # Payroll hasn't recorded a phone yet -> fall back to the kiosk's own copy.
+    payroll.phone = ''
+    payroll.save(update_fields=['phone'])
+    response3 = client.get(PREFIX + 'me/')
+    assert response3.data['phone_number'] == '1111111111'
+
+
 def test_monthly_attendance_is_late_flag_respects_bio_status_only(accounts):
     """Regression: the Attendance & Leave Management page's is_late flag must come from
     the punch's own stored status (already correct for the company default or a
