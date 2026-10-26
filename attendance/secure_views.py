@@ -463,11 +463,11 @@ class EmployeeRegisterView(PublicView):
             if getattr(payroll, 'id', None):
                 other_employees = other_employees.exclude(payroll_employee=payroll)
 
-            # Use strict 0.30 threshold so different real coworkers (with mobile lighting/camera variations)
+            # Use strict 0.25 threshold so different real coworkers (with mobile lighting/camera variations)
             # are never falsely rejected. Only near-identical duplicate photos are caught.
             for other in other_employees:
                 other_vector = parse_face_vector(other.face_encoding)
-                if other_vector and face_distance(other_vector, vector) <= 0.30:
+                if other_vector and face_distance(other_vector, vector) <= 0.25:
                     raise PermissionDenied(
                         f'This face is already registered to another employee account: {other.full_name} ({other.emp_id}).'
                     )
