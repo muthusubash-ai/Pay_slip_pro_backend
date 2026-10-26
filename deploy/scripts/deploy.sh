@@ -87,7 +87,10 @@ chmod +x "${BACKEND_DIR}/deploy/scripts/"*.sh
 # 6. Restart Gunicorn & Reload Nginx
 echo "[6/6] Reloading system services..."
 systemctl daemon-reload
-systemctl restart payslippro.service
+# The actual systemd unit on this server is payslip_backend.service (set up
+# manually, binding gunicorn to 127.0.0.1:8000) - not payslippro.service from
+# deploy/systemd/payslippro.service, which was never actually installed here.
+systemctl restart payslip_backend.service
 systemctl reload nginx
 
 echo "===================================================================="
