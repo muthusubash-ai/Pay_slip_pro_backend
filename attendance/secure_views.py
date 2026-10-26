@@ -462,7 +462,7 @@ class EmployeeRegisterView(PublicView):
                 other_vector = parse_face_vector(other.face_encoding)
                 if other_vector and face_distance(other_vector, vector) <= FACE_MATCH_THRESHOLD:
                     raise PermissionDenied(
-                        'This face is already registered to another employee account.'
+                        f'This face is already registered to another employee account: {other.full_name} ({other.emp_id}).'
                     )
 
             employee.payroll_employee = payroll
