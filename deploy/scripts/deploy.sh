@@ -4,12 +4,16 @@
 # Specifically designed for Hostinger KVM 1 Linux VPS (Ubuntu 22.04 / 24.04)
 # ==============================================================================
 # Run as root or with sudo:
-# sudo /var/www/payslippro/deploy/scripts/deploy.sh
+# sudo /var/www/backend/deploy/scripts/deploy.sh
+# ==============================================================================
+# backend and frontend are two SEPARATE git repos (their own GitHub remotes),
+# both cloned directly under /var/www - not nested inside a shared project
+# folder - so each is pulled independently below.
 # ==============================================================================
 
 set -e
 
-PROJECT_DIR="/var/www/payslippro"
+PROJECT_DIR="/var/www"
 BACKEND_DIR="${PROJECT_DIR}/backend"
 FRONTEND_DIR="${PROJECT_DIR}/frontend"
 
@@ -17,14 +21,17 @@ echo "===================================================================="
 echo "🚀 Starting PaySlipPro Production Deployment on Hostinger KVM 1..."
 echo "===================================================================="
 
-cd "${PROJECT_DIR}"
-
-# 1. Pull latest code if git repo
-if [ -d ".git" ]; then
-    echo "[1/6] Pulling latest updates from Git..."
-    git pull origin main || echo "Git pull skipped (working tree dirty or detached)."
+# 1. Pull latest code in both repos
+echo "[1/6] Pulling latest updates from Git..."
+if [ -d "${BACKEND_DIR}/.git" ]; then
+    (cd "${BACKEND_DIR}" && git pull origin main) || echo "Backend git pull skipped (working tree dirty or detached)."
 else
-    echo "[1/6] Git directory not detected, proceeding with existing files..."
+    echo "Backend git directory not detected, proceeding with existing files..."
+fi
+if [ -d "${FRONTEND_DIR}/.git" ]; then
+    (cd "${FRONTEND_DIR}" && git pull origin main) || echo "Frontend git pull skipped (working tree dirty or detached)."
+else
+    echo "Frontend git directory not detected, proceeding with existing files..."
 fi
 
 # 2. Setup Python Virtual Environment and Backend Dependencies
@@ -68,11 +75,14 @@ npm run build
 
 # 5. Fix File Permissions for Nginx & Gunicorn
 echo "[5/6] Ensuring correct Linux file permissions..."
-cd "${PROJECT_DIR}"
 mkdir -p "${BACKEND_DIR}/media" "${BACKEND_DIR}/uploads" "${BACKEND_DIR}/logs"
-chown -R www-data:www-data "${PROJECT_DIR}"
-chmod -R 755 "${PROJECT_DIR}"
+# Scoped to BACKEND_DIR/FRONTEND_DIR only, not PROJECT_DIR - PROJECT_DIR is now
+# the shared /var/www web root, which can hold other sites (e.g. /var/www/certbot)
+# that must not be touched by this script.
+chown -R www-data:www-data "${BACKEND_DIR}" "${FRONTEND_DIR}"
+chmod -R 755 "${BACKEND_DIR}" "${FRONTEND_DIR}"
 chmod -R 775 "${BACKEND_DIR}/media" "${BACKEND_DIR}/uploads" "${BACKEND_DIR}/logs"
+chmod +x "${BACKEND_DIR}/deploy/scripts/"*.sh
 
 # 6. Restart Gunicorn & Reload Nginx
 echo "[6/6] Reloading system services..."

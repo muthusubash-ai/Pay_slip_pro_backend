@@ -6,8 +6,8 @@ After=network.target postgresql.service
 Type=notify
 User=www-data
 Group=www-data
-WorkingDirectory=/var/www/payslippro/backend
-EnvironmentFile=/var/www/payslippro/backend/.env
+WorkingDirectory=/var/www/backend
+EnvironmentFile=/var/www/backend/.env
 
 # Gunicorn configuration optimized for Hostinger KVM 1 (1 vCPU, 4GB RAM)
 # 3 workers (2 * 1 vCPU + 1), gthread worker class, socket communication.
@@ -15,7 +15,7 @@ EnvironmentFile=/var/www/payslippro/backend/.env
 # master process before forking: workers share that memory via copy-on-write
 # instead of each loading its own copy, and a broken face_recognition import
 # now fails the whole service at startup instead of 503ing every punch later.
-ExecStart=/var/www/payslippro/backend/.venv/bin/gunicorn \
+ExecStart=/var/www/backend/.venv/bin/gunicorn \
     --preload \
     --workers 3 \
     --threads 2 \
@@ -25,8 +25,8 @@ ExecStart=/var/www/payslippro/backend/.venv/bin/gunicorn \
     --max-requests 1000 \
     --max-requests-jitter 100 \
     --bind unix:/run/payslippro.sock \
-    --access-logfile /var/www/payslippro/backend/logs/gunicorn_access.log \
-    --error-logfile /var/www/payslippro/backend/logs/gunicorn_error.log \
+    --access-logfile /var/www/backend/logs/gunicorn_access.log \
+    --error-logfile /var/www/backend/logs/gunicorn_error.log \
     app.wsgi:application
 
 ExecReload=/bin/kill -s HUP $MAINPID

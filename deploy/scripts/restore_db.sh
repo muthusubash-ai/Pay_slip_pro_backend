@@ -2,13 +2,13 @@
 # ==============================================================================
 # PAYSLIP PRO - DATABASE RESTORE UTILITY
 # Usage: ./restore_db.sh /var/backups/payslippro/payslip_backup_YYYYMMDD_HHMMSS.sql.gz
-# Location: /var/www/payslippro/backend/deploy/scripts/restore_db.sh
+# Location: /var/www/backend/deploy/scripts/restore_db.sh
 # ==============================================================================
 
 set -e
 
 BACKUP_FILE="$1"
-PROJECT_DIR="/var/www/payslippro"
+PROJECT_DIR="/var/www"
 
 if [ -z "${BACKUP_FILE}" ] || [ ! -f "${BACKUP_FILE}" ]; then
     echo "Error: Please provide a valid backup .sql.gz file."

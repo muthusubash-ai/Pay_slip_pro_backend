@@ -4,13 +4,13 @@
 # Specifically designed for Hostinger KVM 1 Linux VPS
 # ==============================================================================
 # Suggested Cron Job (Runs every night at 2:00 AM):
-# 0 2 * * * /var/www/payslippro/backend/deploy/scripts/backup_db.sh >> /var/log/payslippro_backup.log 2>&1
+# 0 2 * * * /var/www/backend/deploy/scripts/backup_db.sh >> /var/log/payslippro_backup.log 2>&1
 # ==============================================================================
 
 set -e
 
 # Configurations
-PROJECT_DIR="/var/www/payslippro"
+PROJECT_DIR="/var/www"
 BACKUP_DIR="/var/backups/payslippro"
 RETENTION_DAYS=7
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
