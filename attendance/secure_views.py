@@ -453,14 +453,24 @@ class EmployeeRegisterView(PublicView):
             # same face, so that cross-employee check runs below; a single employee
             # re-registering themselves via a new invite is always allowed.
             #
-            # Two different people must not be able to register with the same (or a
-            # near-identical) face under separate employee accounts.
+            # Exclude the current employee's own records completely so re-registration never conflicts:
             other_employees = Employee.objects.filter(
                 payroll_employee__user=payroll.user, is_active=True
-            ).exclude(pk=employee.pk).exclude(face_encoding__isnull=True)
+            ).exclude(face_encoding__isnull=True)
+            if getattr(employee, 'pk', None):
+                other_employees = other_employees.exclude(pk=employee.pk)
+            if getattr(payroll, 'employee_code', None):
+                other_employees = other_employees.exclude(emp_id__iexact=payroll.employee_code)
+            if getattr(payroll, 'email', None):
+                other_employees = other_employees.exclude(email__iexact=payroll.email)
+            if getattr(payroll, 'id', None):
+                other_employees = other_employees.exclude(payroll_employee=payroll)
+
+            # Use strict 0.30 threshold so different real coworkers (with mobile lighting/camera variations)
+            # are never falsely rejected. Only near-identical duplicate photos are caught.
             for other in other_employees:
                 other_vector = parse_face_vector(other.face_encoding)
-                if other_vector and face_distance(other_vector, vector) <= FACE_MATCH_THRESHOLD:
+                if other_vector and face_distance(other_vector, vector) <= 0.30:
                     raise PermissionDenied(
                         f'This face is already registered to another employee account: {other.full_name} ({other.emp_id}).'
                     )
