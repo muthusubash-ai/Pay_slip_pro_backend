@@ -468,13 +468,17 @@ class CompanyViews:
     @api_view(["GET", "PUT"])
     @permission_classes([IsAuthenticated])
     def company_detail(request):
-        require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Company settings and branding")
         company = company_service.get_company(None, request.user)
         if request.method == "GET":
             if not company:
-                return Response(None)
-            return Response(CompanyResponseSerializer(company).data)
+                from app.models.company import Company
+                company = Company.objects.create(
+                    user=request.user,
+                    company_name="My Company"
+                )
+            return Response(CompanyResponseSerializer(company, context={"request": request}).data)
         elif request.method == "PUT":
+            require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Company settings and branding")
             logger.info("Company PUT request data: %s", request.data)
             serializer = CompanyUpdateSerializer(data=request.data)
             if not serializer.is_valid():
@@ -482,7 +486,7 @@ class CompanyViews:
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             company = company_service.update_company(None, request.user, serializer.validated_data)
             logger.info("Company successfully updated: %s", company.company_name)
-            return Response(CompanyResponseSerializer(company).data)
+            return Response(CompanyResponseSerializer(company, context={"request": request}).data)
 
     @staticmethod
     @api_view(["POST", "DELETE"])
@@ -548,6 +552,18 @@ class EmployeeViews:
             serializer = EmployeeCreateSerializer(data=request.data, context={"request": request})
             serializer.is_valid(raise_exception=True)
             employee = employee_service.create_employee(None, request.user, serializer.validated_data)
+
+            try:
+                from app.services.email_service import send_employee_added_notice_email
+                send_employee_added_notice_email(
+                    to_email=request.user.effective_notification_email,
+                    employee_name=employee.full_name,
+                    employee_code=employee.employee_code,
+                    designation=employee.designation or "",
+                    company_name=request.user.company_name,
+                )
+            except Exception:
+                logging.getLogger(__name__).warning("Employee-added HR notice failed for user %s", request.user.pk, exc_info=True)
 
             email_sent = False
             if send_invitation and employee.email:
@@ -685,6 +701,18 @@ class SalarySlipViews:
         month = serializer.validated_data["month"]
         year = serializer.validated_data["year"]
         slips = salary_service.generate_bulk_slips(None, request.user, month, year)
+        if slips:
+            try:
+                from app.services.email_service import send_slip_generation_summary_email
+                send_slip_generation_summary_email(
+                    to_email=request.user.effective_notification_email,
+                    count=len(slips),
+                    month_name=calendar.month_name[month],
+                    year=year,
+                    company_name=request.user.company_name,
+                )
+            except Exception:
+                logging.getLogger(__name__).warning("Slip-generation summary email failed for user %s", request.user.pk, exc_info=True)
         attendance_pending = [
             item["employee_id"]
             for item in attendance_service.get_attendance_readiness(request.user, month, year)
@@ -720,6 +748,17 @@ class SalarySlipViews:
         
         employee = employee_service.get_employee(None, request.user, employee_id)
         slip = salary_service.generate_slip_for_employee(None, request.user, employee, month, year)
+        try:
+            from app.services.email_service import send_slip_generated_email
+            send_slip_generated_email(
+                to_email=request.user.effective_notification_email,
+                employee_name=employee.full_name,
+                month_name=calendar.month_name[month],
+                year=year,
+                company_name=request.user.company_name,
+            )
+        except Exception:
+            logging.getLogger(__name__).warning("Slip-generated email failed for user %s", request.user.pk, exc_info=True)
         return Response(SalarySlipResponseSerializer(slip).data, status=status.HTTP_201_CREATED)
 
     @staticmethod
@@ -787,6 +826,17 @@ class SalarySlipViews:
             slip.status = SlipStatus.sent
             slip.emailed_at = timezone.now()
             slip.save()
+            try:
+                from app.services.email_service import send_slip_emailed_notice_email
+                send_slip_emailed_notice_email(
+                    to_email=request.user.effective_notification_email,
+                    employee_name=slip.employee.full_name,
+                    month_name=calendar.month_name[slip.month],
+                    year=slip.year,
+                    company_name=company_name,
+                )
+            except Exception:
+                logging.getLogger(__name__).warning("Slip-emailed HR notice failed for user %s", request.user.pk, exc_info=True)
             return Response({"sent": True, "message": f"Email sent to {slip.employee.email}"})
             
         return Response({
@@ -901,6 +951,11 @@ class DashboardViews:
     @permission_classes([IsAuthenticated])
     def get_stats(request):
         require_minimum_plan(request.user, PLAN_STARTER, "Dashboard overview")
+        try:
+            from app.services.plan_notification_service import check_and_notify_plan_expiry
+            check_and_notify_plan_expiry(request.user)
+        except Exception:
+            logging.getLogger(__name__).warning("Plan-expiry check failed for user %s", request.user.pk, exc_info=True)
         res = dashboard_service.get_dashboard_stats(None, request.user)
         return Response(DashboardStatsSerializer(res).data)
 

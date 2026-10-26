@@ -615,3 +615,201 @@ def send_missed_checkout_reminder_email(
 </body>
 </html>"""
     return _send_email(to_email, subject, html_body)
+
+
+_PLAN_EXPIRY_COPY = {
+    "7d": ("Plan Expiring Soon", "will expire in {when}"),
+    "48h": ("Plan Expiring Tomorrow", "expires tomorrow"),
+    "24h": ("Plan Expiring Today", "expires today"),
+    "expired": ("Plan Expired", "has expired"),
+}
+
+
+def send_plan_expiry_notice_email(
+    to_email: str, plan_name: str, stage: str, expires_at_str: str, when: str = "", company_name: str = "",
+) -> bool:
+    """Notify HR that the subscription plan is expiring soon or has expired."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid HR email for plan-expiry notice: %s", to_email)
+        return False
+
+    from html import escape
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    heading, phrase_template = _PLAN_EXPIRY_COPY.get(stage, _PLAN_EXPIRY_COPY["7d"])
+    phrase = phrase_template.format(when=when or "a few days")
+    plan_name_esc, expires_at_esc, sender_name_esc = (
+        escape(str(v)) for v in (plan_name, expires_at_str, sender_name)
+    )
+    subject = f"{heading}: {plan_name} Plan"
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #f43f5e 0%, #be123c 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">{heading}</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear HR,</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.6;">
+        Your <strong>{plan_name_esc}</strong> plan {phrase} (on {expires_at_esc}). Renew from Settings to avoid any
+        work interruption.
+      </p>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)
+
+
+def send_slip_generation_summary_email(
+    to_email: str, count: int, month_name: str, year: int, company_name: str = "",
+) -> bool:
+    """Notify HR that a bulk salary-slip generation run has completed."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid HR email for slip-generation summary: %s", to_email)
+        return False
+
+    from html import escape
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    month_name_esc, sender_name_esc = (escape(str(v)) for v in (month_name, sender_name))
+    subject = f"{count} Salary Slip{'s' if count != 1 else ''} Generated - {month_name} {year}"
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">Salary Slips Generated</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear HR,</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.6;">
+        <strong>{count}</strong> salary slip{'s' if count != 1 else ''} {'were' if count != 1 else 'was'} generated
+        for <strong>{month_name_esc} {year}</strong>.
+      </p>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)
+
+
+def send_slip_generated_email(
+    to_email: str, employee_name: str, month_name: str, year: int, company_name: str = "",
+) -> bool:
+    """Notify HR that a single employee's salary slip was generated."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid HR email for single slip-generation notice: %s", to_email)
+        return False
+
+    from html import escape
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    employee_name_esc, month_name_esc, sender_name_esc = (
+        escape(str(v)) for v in (employee_name, month_name, sender_name)
+    )
+    subject = f"Salary Slip Generated - {employee_name} ({month_name} {year})"
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #10b981 0%, #047857 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">Salary Slip Generated</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear HR,</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.6;">
+        A salary slip for <strong>{employee_name_esc}</strong> was generated for <strong>{month_name_esc} {year}</strong>.
+      </p>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)
+
+
+def send_slip_emailed_notice_email(
+    to_email: str, employee_name: str, month_name: str, year: int, company_name: str = "",
+) -> bool:
+    """Notify HR that a salary slip was emailed out to an employee."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid HR email for slip-emailed notice: %s", to_email)
+        return False
+
+    from html import escape
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    employee_name_esc, month_name_esc, sender_name_esc = (
+        escape(str(v)) for v in (employee_name, month_name, sender_name)
+    )
+    subject = f"Salary Slip Emailed - {employee_name} ({month_name} {year})"
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #0ea5e9 0%, #0369a1 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">Salary Slip Emailed</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear HR,</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.6;">
+        The salary slip for <strong>{employee_name_esc}</strong> ({month_name_esc} {year}) was emailed to their
+        registered address.
+      </p>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)
+
+
+def send_employee_added_notice_email(
+    to_email: str, employee_name: str, employee_code: str, designation: str = "", company_name: str = "",
+) -> bool:
+    """Notify HR that a new employee record was created."""
+    if not to_email or "@" not in to_email:
+        logger.warning("Invalid HR email for employee-added notice: %s", to_email)
+        return False
+
+    from html import escape
+    sender_name = company_name or getattr(settings, "APP_NAME", "Pay Slip Pro")
+    employee_name_esc, employee_code_esc, designation_esc, sender_name_esc = (
+        escape(str(v)) for v in (employee_name, employee_code, designation or "-", sender_name)
+    )
+    subject = f"New Employee Added - {employee_name} ({employee_code})"
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
+  <div style="max-width: 460px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; border: 1px solid #e2e8f0; box-shadow: 0 4px 14px rgba(0,0,0,0.06);">
+    <div style="background: linear-gradient(135deg, #6366f1 0%, #4338ca 100%); color: #ffffff; padding: 24px 20px; text-align: center;">
+      <div style="font-size: 20px; font-weight: 800;">{sender_name_esc}</div>
+      <div style="font-size: 13px; opacity: 0.95; margin-top: 4px;">New Employee Added</div>
+    </div>
+    <div style="padding: 24px 20px;">
+      <p style="margin-top: 0; font-size: 14px;">Dear HR,</p>
+      <table style="width: 100%; border-collapse: collapse; font-size: 13px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;">
+        <tr><td style="padding: 10px 14px; color: #64748b; border-bottom: 1px solid #e2e8f0;">Name</td><td style="padding: 10px 14px; text-align: right; font-weight: 700; border-bottom: 1px solid #e2e8f0;">{employee_name_esc}</td></tr>
+        <tr><td style="padding: 10px 14px; color: #64748b; border-bottom: 1px solid #e2e8f0;">Employee Code</td><td style="padding: 10px 14px; text-align: right; font-weight: 700; border-bottom: 1px solid #e2e8f0;">{employee_code_esc}</td></tr>
+        <tr><td style="padding: 10px 14px; color: #64748b;">Designation</td><td style="padding: 10px 14px; text-align: right; font-weight: 700;">{designation_esc}</td></tr>
+      </table>
+      <p style="font-size: 12px; color: #94a3b8; margin-top: 20px;">Best regards,<br><strong>HR &amp; Administration Team</strong><br>{sender_name_esc}</p>
+    </div>
+  </div>
+</body>
+</html>"""
+    return _send_email(to_email, subject, html_body)

@@ -62,6 +62,10 @@ class User(AbstractBaseUser, TimestampModel):
     # are sent. Lets the account's login email differ from the inbox HR actually
     # watches. Falls back to `email` when blank.
     notification_email = models.EmailField(max_length=255, null=True, blank=True)
+    # Dedup key "<stage>:<plan_expires_at isoformat>" for the last plan-expiry
+    # notice emailed to this user - a renewal changes plan_expires_at, which
+    # changes the key, so the notice cycle resets automatically.
+    plan_expiry_notice_key = models.CharField(max_length=40, null=True, blank=True)
 
     objects = UserManager()
 

@@ -83,6 +83,16 @@ class CompanyUpdateSerializer(serializers.ModelSerializer):
 
 
 class CompanyResponseSerializer(serializers.ModelSerializer):
+    is_locked = serializers.SerializerMethodField()
+
+    def get_is_locked(self, obj) -> bool:
+        request = self.context.get("request")
+        user = getattr(request, "user", None) or getattr(obj, "user", None)
+        if not user:
+            return False
+        from app.plans import has_minimum_plan, PLAN_PROFESSIONAL
+        return not has_minimum_plan(user, PLAN_PROFESSIONAL)
+
     class Meta:
         model = Company
         fields = [
@@ -108,4 +118,5 @@ class CompanyResponseSerializer(serializers.ModelSerializer):
             "office_start_time",
             "office_end_time",
             "enable_employee_shift_timing",
+            "is_locked",
         ]

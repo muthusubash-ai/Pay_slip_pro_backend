@@ -1,8 +1,36 @@
-"""Attendance identities are separate from payroll administrators."""
 import hashlib
+import os
 import secrets
+import sys
+import types
 import warnings
 from datetime import timedelta
+
+# Modern setuptools no longer ships pkg_resources, which face_recognition_models
+# needs to locate its bundled .dat model weights. This shim ensures face-recognition
+# works reliably across all environments without dependency errors.
+if "pkg_resources" not in sys.modules:
+    try:
+        import pkg_resources  # noqa: F401
+    except ImportError:
+        import importlib
+
+        _pkg_resources_shim = types.ModuleType("pkg_resources")
+
+        def _resource_filename(package_or_requirement: str, resource_name: str) -> str:
+            module = importlib.import_module(package_or_requirement)
+            return os.path.join(os.path.dirname(module.__file__), resource_name)
+
+        _pkg_resources_shim.resource_filename = _resource_filename
+        sys.modules["pkg_resources"] = _pkg_resources_shim
+elif not hasattr(sys.modules["pkg_resources"], "resource_filename"):
+    import importlib
+
+    def _resource_filename(package_or_requirement: str, resource_name: str) -> str:
+        module = importlib.import_module(package_or_requirement)
+        return os.path.join(os.path.dirname(module.__file__), resource_name)
+
+    sys.modules["pkg_resources"].resource_filename = _resource_filename
 
 from django.conf import settings
 from django.contrib.auth.password_validation import validate_password

@@ -40,7 +40,7 @@ from .security import (
     set_session,
 )
 
-FACE_MATCH_THRESHOLD = 0.58
+FACE_MATCH_THRESHOLD = 0.60
 from .services import evaluate_attendance_status, haversine_distance
 
 
@@ -526,6 +526,19 @@ class MarkAttendanceView(EmployeeView):
     def post(self, request):
         employee = request.user
         payroll = employee.payroll_employee
+        if not payroll:
+            from app.models.employee import Employee as PayrollEmployee
+            payroll = PayrollEmployee.objects.filter(
+                Q(email__iexact=employee.email) | Q(employee_code__iexact=employee.emp_id),
+                is_active=True
+            ).first()
+            if payroll:
+                employee.payroll_employee = payroll
+                employee.save(update_fields=['payroll_employee'])
+
+        if not payroll or not getattr(payroll, 'user', None):
+            raise ValidationError('Your employee profile is not linked to an active company payroll. Please contact your administrator.')
+
         company = getattr(payroll.user, 'company', None)
         if not company or company.office_lat is None or company.office_lng is None or not company.allowed_radius_meters or company.allowed_radius_meters < 1:
             raise ValidationError('Your administrator must configure the office location first.')
@@ -539,38 +552,13 @@ class MarkAttendanceView(EmployeeView):
         if distance > company.allowed_radius_meters:
             raise PermissionDenied('Attendance is allowed only within the configured office area.')
         captured = encode_photo(request.FILES.get('face_image'))
-        stored = employee.face_encoding
-        parsed_stored = None
-        if stored:
-            if isinstance(stored, str):
-                try:
-                    stored = json.loads(stored)
-                except Exception:
-                    pass
-            if isinstance(stored, dict):
-                if 'descriptor' in stored:
-                    stored = stored['descriptor']
-                elif 'face_encoding' in stored:
-                    stored = stored['face_encoding']
-                elif 'face_descriptor' in stored:
-                    stored = stored['face_descriptor']
-                else:
-                    try:
-                        stored = [stored[str(i)] for i in range(128)]
-                    except Exception:
-                        pass
-            if isinstance(stored, (list, tuple)) and len(stored) == 128:
-                try:
-                    parsed_stored = [float(x) for x in stored]
-                except (ValueError, TypeError):
-                    parsed_stored = None
-
+        parsed_stored = parse_face_vector(employee.face_encoding)
         if not parsed_stored or len(parsed_stored) != 128:
-            raise PermissionDenied('Face verification failed. Ask your administrator for a new invitation if re-enrollment is needed.')
+            raise PermissionDenied('No registered face photo found for your account. Please ask your administrator for a new invitation to enroll your face.')
 
-        dist = math.dist(parsed_stored, captured)
-        if dist > 0.58:
-            raise PermissionDenied(f'Face verification failed (similarity: {dist:.2f}). Ask your administrator for a new invitation if re-enrollment is needed.')
+        dist = face_distance(parsed_stored, captured)
+        if dist > FACE_MATCH_THRESHOLD:
+            raise PermissionDenied(f'Face verification failed (similarity: {dist:.2f}). Please face the camera directly in good lighting.')
 
         now = timezone.localtime()
         today = now.date()

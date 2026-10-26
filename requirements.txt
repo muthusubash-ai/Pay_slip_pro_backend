@@ -20,4 +20,7 @@ whitenoise>=6.6.0
 google-auth[requests]>=2.40,<3
 sentry-sdk>=2.0.0
 numpy>=1.24.0
+dlib-bin>=20.0; sys_platform == 'win32'
+dlib>=19.24.0; sys_platform != 'win32'
+face_recognition_models>=0.3.0
 face_recognition>=1.2.3

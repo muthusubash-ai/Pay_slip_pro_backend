@@ -29,7 +29,11 @@ def test_starter_gets_basic_dashboard_but_not_professional_features(client, auth
 
     assert client.get("/api/v1/dashboard/stats", headers=auth_headers).status_code == 200
     assert client.get("/api/v1/dashboard/payroll-summary", headers=auth_headers).status_code == 403
-    assert client.get("/api/v1/company/", headers=auth_headers).status_code == 403
+    # Starter can view company (is_locked=True) but cannot update
+    company_get = client.get("/api/v1/company/", headers=auth_headers)
+    assert company_get.status_code == 200
+    assert company_get.json().get("is_locked") is True
+    assert client.put("/api/v1/company/", json={"company_name": "New"}, headers=auth_headers).status_code == 403
     assert client.get(
         "/api/v1/attendance/leave-summary?month=1&year=2026",
         headers=auth_headers,
@@ -159,7 +163,7 @@ def test_plan_expiry_sets_is_plan_expired_and_restricts_access(client, auth_head
     assert data["plan_days_left"] == 0
 
     # Professional features are restricted
-    assert client.get("/api/v1/company/", headers=auth_headers).status_code == 403
+    assert client.put("/api/v1/company/", json={"company_name": "New"}, headers=auth_headers).status_code == 403
 
 
 def test_plan_active_returns_not_expired(client, auth_headers):
