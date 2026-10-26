@@ -95,5 +95,5 @@ systemctl reload nginx
 
 echo "===================================================================="
 echo "✓ Deployment complete! Application is running live."
-echo "Status check: sudo systemctl status payslippro.service"
+echo "Status check: sudo systemctl status payslip_backend.service"
 echo "===================================================================="
