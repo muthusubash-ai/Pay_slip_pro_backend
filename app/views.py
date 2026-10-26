@@ -171,6 +171,22 @@ from app.upload_validation import validate_logo_upload
 logger = logging.getLogger(__name__)
 
 
+def resolve_frontend_url(request):
+    origin = request.headers.get("Origin") or ""
+    if origin and (origin.startswith("http://") or origin.startswith("https://")):
+        return origin.rstrip('/')
+    referer = request.headers.get("Referer") or ""
+    if referer and (referer.startswith("http://") or referer.startswith("https://")):
+        from urllib.parse import urlparse
+        p = urlparse(referer)
+        if p.scheme and p.netloc:
+            return f"{p.scheme}://{p.netloc}".rstrip('/')
+    if hasattr(request, "get_host") and request.get_host():
+        scheme = "https" if (request.is_secure() or request.headers.get("X-Forwarded-Proto") == "https") else "http"
+        return f"{scheme}://{request.get_host()}".rstrip('/')
+    return getattr(settings, 'FRONTEND_URL', 'https://payslippro.sbs').rstrip('/')
+
+
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @throttle_classes([IfscLookupRateThrottle])
@@ -569,11 +585,10 @@ class EmployeeViews:
             if send_invitation and employee.email:
                 try:
                     from app.services.email_service import send_employee_registration_invitation_email
-                    origin = request.headers.get("Origin") or ""
-                    frontend_url = origin if (origin and ("localhost" in origin or "127.0.0.1" in origin)) else getattr(settings, 'FRONTEND_URL', 'http://localhost:3050')
+                    frontend_url = resolve_frontend_url(request)
                     from attendance.security import issue_invite
                     invitation_token = issue_invite(employee)
-                    portal_url = f"{frontend_url.rstrip('/')}/biometric"
+                    portal_url = f"{frontend_url}/biometric"
                     company_name = getattr(request.user, 'company_name', '') or getattr(request.user, 'company', '') or settings.APP_NAME
                     email_sent = send_employee_registration_invitation_email(
                         to_email=employee.email,
@@ -628,11 +643,12 @@ class EmployeeViews:
             return Response({"detail": "Employee has no email address configured."}, status=status.HTTP_400_BAD_REQUEST)
 
         from app.services.email_service import send_employee_registration_invitation_email
-        origin = request.headers.get("Origin") or ""
-        frontend_url = origin if (origin and ("localhost" in origin or "127.0.0.1" in origin)) else getattr(settings, 'FRONTEND_URL', 'http://localhost:3050')
+        frontend_url = resolve_frontend_url(request)
         from attendance.security import issue_invite
         invitation_token = issue_invite(employee)
-        portal_url = f"{frontend_url.rstrip('/')}/biometric"
+        portal_url = f"{frontend_url}/biometric"
+        import urllib.parse
+        registration_url = f"{portal_url}?tab=onboard&invite={urllib.parse.quote(invitation_token)}#invite={urllib.parse.quote(invitation_token)}"
         company_name = getattr(request.user, 'company_name', '') or getattr(request.user, 'company', '') or settings.APP_NAME
 
         success = send_employee_registration_invitation_email(
@@ -643,10 +659,17 @@ class EmployeeViews:
             company_name=company_name,
             invitation_token=invitation_token,
         )
-        if success:
-            return Response({"detail": f"Registration invitation email sent to {employee.email} successfully."})
-        else:
-            return Response({"detail": "Failed to send email. Please verify SMTP settings."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        msg = (
+            f"Registration invitation email sent to {employee.email} successfully."
+            if success
+            else "Invite link generated successfully (email delivery could not be verified, but you can copy the link directly)."
+        )
+        return Response({
+            "detail": msg,
+            "email_sent": success,
+            "invite_url": registration_url,
+            "token": invitation_token
+        }, status=status.HTTP_200_OK)
 
     @staticmethod
     @api_view(["POST"])

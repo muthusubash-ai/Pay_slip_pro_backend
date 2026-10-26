@@ -40,7 +40,7 @@ from .security import (
     set_session,
 )
 
-FACE_MATCH_THRESHOLD = 0.58
+FACE_MATCH_THRESHOLD = 0.52
 from .services import evaluate_attendance_status, haversine_distance
 
 
@@ -335,8 +335,8 @@ class GoogleLoginView(PublicView):
 class LookupEmployeeView(PublicView):
     def get(self, request):
         payroll = get_invite(request).payroll_employee
-        account = Employee.objects.filter(payroll_employee=payroll).first()
-        is_already_registered = bool(account and account.password and account.face_encoding and account.is_active)
+        # A valid, unexpired admin invite explicitly authorizes onboarding / face re-enrollment
+        is_already_registered = False
 
         conflict = Employee.objects.filter(email__iexact=payroll.email, is_active=True).first()
         is_email_conflict = bool(

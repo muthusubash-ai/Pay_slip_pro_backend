@@ -98,7 +98,12 @@ def issue_invite(employee):
         raise ValidationError('Only active employees can be invited.')
     ActivationInvite.objects.filter(payroll_employee=employee, used=False).update(used=True)
     token = secrets.token_urlsafe(32)
-    ActivationInvite.objects.create(payroll_employee=employee, email=employee.email.lower(), digest=digest(token), expires_at=timezone.now() + timedelta(hours=24))
+    ActivationInvite.objects.create(
+        payroll_employee=employee,
+        email=employee.email.strip().lower(),
+        digest=digest(token),
+        expires_at=timezone.now() + timedelta(hours=72)
+    )
     return token
 
 
@@ -107,12 +112,13 @@ def get_invite(request, lock=False):
         request.headers.get('X-Attendance-Invite', '')
         or (getattr(request, 'query_params', None) and (request.query_params.get('invite') or request.query_params.get('token')))
         or (getattr(request, 'GET', None) and (request.GET.get('invite') or request.GET.get('token')))
-        or (getattr(request, 'data', None) and isinstance(request.data, dict) and (request.data.get('invite') or request.data.get('token')))
+        or (getattr(request, 'data', None) and hasattr(request.data, 'get') and (request.data.get('invite') or request.data.get('token')))
         or ''
     )
+    token = str(token).strip()
     query = ActivationInvite.objects.select_for_update() if lock else ActivationInvite.objects
     invitation = query.filter(digest=digest(token), used=False, expires_at__gt=timezone.now()).first()
-    if not invitation or not invitation.payroll_employee.is_active or not invitation.payroll_employee.user.is_active or invitation.email != invitation.payroll_employee.email.lower():
+    if not invitation or not invitation.payroll_employee.is_active or not invitation.payroll_employee.user.is_active or invitation.email.strip().lower() != invitation.payroll_employee.email.strip().lower():
         raise PermissionDenied('A valid admin invitation is required. Ask your company administrator to send a new invitation.')
     return invitation
 
@@ -260,10 +266,20 @@ def encode_photo(upload):
         raise ValidationError('No clear human face detected. Please face the camera and try again.')
 
     if len(locations) > 1:
-        # In selfie / kiosk capture, pick the largest foreground face
+        # Check if another person is present in the frame
+        areas = [(loc[2] - loc[0]) * (loc[1] - loc[3]) for loc in locations]
+        areas.sort(reverse=True)
+        if len(areas) > 1 and areas[1] > (areas[0] * 0.45):
+            raise ValidationError('Multiple people detected in frame. Only the employee must be visible during biometric verification.')
         locations = sorted(locations, key=lambda loc: (loc[2] - loc[0]) * (loc[1] - loc[3]), reverse=True)
         primary_face = locations[0]
         locations = [primary_face]
+
+    loc = locations[0]
+    face_h = loc[2] - loc[0]
+    face_w = loc[1] - loc[3]
+    if face_h < 50 or face_w < 50:
+        raise ValidationError('Face is too far or small. Please move closer to the camera and try again.')
 
     encodings = face_recognition.face_encodings(array, locations)
     if len(encodings) != 1:
