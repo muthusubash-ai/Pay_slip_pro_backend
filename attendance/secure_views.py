@@ -352,7 +352,7 @@ class LookupEmployeeView(PublicView):
         return Response({'found': True, 'emp_id': payroll.employee_code, 'full_name': payroll.full_name,
                          'email': payroll.email, 'designation': payroll.designation or '',
                          'phone_number': payroll.phone or '', 'joining_date': str(payroll.date_of_joining),
-                         'gender': payroll.gender or '',
+                         'gender': '',
                          'already_registered': is_already_registered,
                          'email_conflict': is_email_conflict,
                          'email_conflict_error': email_conflict_error,
