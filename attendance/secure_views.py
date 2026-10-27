@@ -340,13 +340,11 @@ class LookupEmployeeView(PublicView):
 
         conflict = Employee.objects.filter(email__iexact=payroll.email, is_active=True).first()
         is_email_conflict = bool(
-            conflict and (
-                conflict.payroll_employee_id != payroll.id if conflict.payroll_employee_id else conflict.emp_id.lower() != payroll.employee_code.lower()
-            )
+            conflict and conflict.emp_id.lower() != payroll.employee_code.lower()
         )
         email_conflict_error = (
-            'This email is already assigned to another attendance account. Contact your administrator.'
-            if is_email_conflict else ''
+            f'This email is already assigned to another attendance account ({conflict.emp_id} - {conflict.full_name}). Contact your administrator.'
+            if is_email_conflict and conflict else ''
         )
 
         return Response({'found': True, 'emp_id': payroll.employee_code, 'full_name': payroll.full_name,
@@ -412,11 +410,13 @@ class EmployeeRegisterView(PublicView):
         def find_existing_employee():
             found = Employee.objects.filter(payroll_employee=payroll).first()
             if not found:
-                found = Employee.objects.filter(email__iexact=payroll.email, is_active=True).first()
-                if found and (found.payroll_employee_id or found.emp_id.lower() != payroll.employee_code.lower()):
-                    raise ValidationError('This email is already assigned to another attendance account. Contact your administrator.')
-            if not found:
                 found = Employee.objects.filter(emp_id__iexact=payroll.employee_code).first()
+            if not found:
+                found = Employee.objects.filter(email__iexact=payroll.email, is_active=True).first()
+                if found and found.emp_id.lower() != payroll.employee_code.lower():
+                    raise ValidationError(
+                        f'This email is already assigned to another attendance account ({found.emp_id} - {found.full_name}). Contact your administrator.'
+                    )
             return found
 
         # Reject duplicate registration without an invitation only if account already has both password AND face:
@@ -435,11 +435,13 @@ class EmployeeRegisterView(PublicView):
                     pass
             employee = Employee.objects.select_for_update().filter(payroll_employee=payroll).first()
             if not employee:
-                employee = Employee.objects.select_for_update().filter(email__iexact=payroll.email, is_active=True).first()
-                if employee and (employee.payroll_employee_id or employee.emp_id.lower() != payroll.employee_code.lower()):
-                    raise ValidationError('This email is already assigned to another attendance account. Contact your administrator.')
-            if not employee:
                 employee = Employee.objects.select_for_update().filter(emp_id__iexact=payroll.employee_code).first()
+            if not employee:
+                employee = Employee.objects.select_for_update().filter(email__iexact=payroll.email, is_active=True).first()
+                if employee and employee.emp_id.lower() != payroll.employee_code.lower():
+                    raise ValidationError(
+                        f'This email is already assigned to another attendance account ({employee.emp_id} - {employee.full_name}). Contact your administrator.'
+                    )
             if not employee:
                 employee = Employee(email=payroll.email)
 
@@ -463,11 +465,11 @@ class EmployeeRegisterView(PublicView):
             if getattr(payroll, 'id', None):
                 other_employees = other_employees.exclude(payroll_employee=payroll)
 
-            # Use strict 0.25 threshold so different real coworkers (with mobile lighting/camera variations)
+            # Use strict 0.20 threshold so different real coworkers (with mobile lighting/camera variations)
             # are never falsely rejected. Only near-identical duplicate photos are caught.
             for other in other_employees:
                 other_vector = parse_face_vector(other.face_encoding)
-                if other_vector and face_distance(other_vector, vector) <= 0.25:
+                if other_vector and face_distance(other_vector, vector) <= 0.20:
                     raise PermissionDenied(
                         f'This face is already registered to another employee account: {other.full_name} ({other.emp_id}).'
                     )
