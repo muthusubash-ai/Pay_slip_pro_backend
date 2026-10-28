@@ -132,12 +132,49 @@ def check_password_strength(password, employee=None):
         raise ValidationError(' '.join(exc.messages)) from exc
 
 
+SESSION_DAYS = 30
+SESSION_MAX_AGE = SESSION_DAYS * 86400
+
+
 def set_session(response, employee):
     EmployeeSession.objects.filter(expires_at__lte=timezone.now()).delete()
     token = secrets.token_urlsafe(32)
-    EmployeeSession.objects.create(employee=employee, digest=digest(token), expires_at=timezone.now() + timedelta(hours=12))
-    response.set_cookie(COOKIE, token, max_age=43200, httponly=True, secure=not settings.DEBUG, samesite=settings.AUTH_COOKIE_SAMESITE, path=COOKIE_PATH)
+    EmployeeSession.objects.create(
+        employee=employee,
+        digest=digest(token),
+        expires_at=timezone.now() + timedelta(days=SESSION_DAYS),
+    )
+    response.set_cookie(
+        COOKIE,
+        token,
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        secure=not settings.DEBUG,
+        samesite=settings.AUTH_COOKIE_SAMESITE,
+        path=COOKIE_PATH,
+    )
     response['Cache-Control'] = 'no-store'
+    return response
+
+
+def extend_session(request, response, session):
+    """Keep active employees logged in by rolling forward the session expiry."""
+    token = request.COOKIES.get(COOKIE)
+    if token and session and getattr(session, 'pk', None):
+        try:
+            session.expires_at = timezone.now() + timedelta(days=SESSION_DAYS)
+            session.save(update_fields=['expires_at'])
+            response.set_cookie(
+                COOKIE,
+                token,
+                max_age=SESSION_MAX_AGE,
+                httponly=True,
+                secure=not settings.DEBUG,
+                samesite=settings.AUTH_COOKIE_SAMESITE,
+                path=COOKIE_PATH,
+            )
+        except Exception:
+            pass
     return response
 
 

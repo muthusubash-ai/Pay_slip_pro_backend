@@ -38,9 +38,10 @@ from .security import (
     get_invite,
     parse_face_vector,
     set_session,
+    extend_session,
 )
 
-FACE_MATCH_THRESHOLD = 0.52
+FACE_MATCH_THRESHOLD = 0.55
 from .services import evaluate_attendance_status, haversine_distance
 
 
@@ -269,7 +270,8 @@ class AttendanceResetPasswordView(PublicView):
 
 class MeView(EmployeeView):
     def get(self, request):
-        return Response(profile(request.user), headers={'Cache-Control': 'no-store'})
+        response = Response(profile(request.user), headers={'Cache-Control': 'no-store'})
+        return extend_session(request, response, getattr(request, 'auth', None))
 
 
 class LogoutView(EmployeeView):
@@ -665,10 +667,11 @@ class MarkAttendanceView(EmployeeView):
             'PERMISSION_OUT': 'Permission step-out recorded. Punch in when you return.',
             'PERMISSION_IN': 'Welcome back! Permission break ended.',
         }
-        return Response({'message': kind_messages.get(kind, 'Attendance recorded.'), 'type': kind, 'status': record.status, 'employee_name': payroll.full_name,
+        response = Response({'message': kind_messages.get(kind, 'Attendance recorded.'), 'type': kind, 'status': record.status, 'employee_name': payroll.full_name,
                          'emp_id': employee.emp_id, 'check_in': format_punch_time(record.check_in), 'check_out': format_punch_time(record.check_out),
                          'permission_out': format_punch_time(record.permission_out), 'permission_in': format_punch_time(record.permission_in),
                          'distance': f'{distance:.1f}m'}, status=201)
+        return extend_session(request, response, getattr(request, 'auth', None))
 
 
 class AttendanceHistoryView(EmployeeView):
