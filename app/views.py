@@ -203,10 +203,12 @@ def resolve_target_user(request):
         target_id = None
         if hasattr(request, "query_params") and request.query_params.get("company_user_id"):
             target_id = request.query_params.get("company_user_id")
-        elif hasattr(request, "headers") and request.headers.get("X-Company-User-Id"):
-            target_id = request.headers.get("X-Company-User-Id")
         elif hasattr(request, "GET") and request.GET.get("company_user_id"):
             target_id = request.GET.get("company_user_id")
+        elif hasattr(request, "headers") and request.headers.get("X-Company-User-Id"):
+            target_id = request.headers.get("X-Company-User-Id")
+        elif hasattr(request, "META") and request.META.get("HTTP_X_COMPANY_USER_ID"):
+            target_id = request.META.get("HTTP_X_COMPANY_USER_ID")
         elif hasattr(request, "data") and isinstance(request.data, dict) and request.data.get("company_user_id"):
             target_id = request.data.get("company_user_id")
 
