@@ -139,8 +139,10 @@ class User(AbstractBaseUser, TimestampModel):
 
     @property
     def company_name(self):
-        company = getattr(self, "company", None)
-        return company.company_name if company else "-"
+        try:
+            return self.company.company_name if hasattr(self, "company") and self.company else "-"
+        except Exception:
+            return "-"
 
     @property
     def effective_notification_email(self):

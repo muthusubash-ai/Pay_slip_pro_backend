@@ -3,9 +3,17 @@ from app.models.user import User
 
 
 class UserAdminResponseSerializer(serializers.ModelSerializer):
+    company_name = serializers.SerializerMethodField()
+
     class Meta:
         model = User
-        fields = ["id", "email", "full_name", "role", "plan", "is_active", "created_at"]
+        fields = ["id", "email", "full_name", "role", "plan", "is_active", "created_at", "company_name"]
+
+    def get_company_name(self, obj):
+        try:
+            return obj.company.company_name if hasattr(obj, "company") and obj.company else "-"
+        except Exception:
+            return "-"
 
 
 class UpdateUserRoleRequestSerializer(serializers.Serializer):

@@ -107,6 +107,7 @@ from app.auth.throttles import (
 from app.exceptions import BadRequestError, ForbiddenError
 from app.models.employee import Employee
 from app.models.salary_slip import SalarySlip
+from app.models.user import User
 from app.plans import (
     PLAN_ENTERPRISE,
     PLAN_PROFESSIONAL,
@@ -185,6 +186,38 @@ def resolve_frontend_url(request):
         scheme = "https" if (request.is_secure() or request.headers.get("X-Forwarded-Proto") == "https") else "http"
         return f"{scheme}://{request.get_host()}".rstrip('/')
     return getattr(settings, 'FRONTEND_URL', 'https://payslippro.sbs').rstrip('/')
+
+
+def resolve_target_user(request):
+    """
+    If request.user is a platform admin (or role == admin), allow scoping to a target
+    company user provided via query params ('company_user_id'), custom header ('X-Company-User-Id'),
+    or request payload. Otherwise, strictly return request.user.
+    This guarantees non-admin users cannot access or view other companies' data.
+    """
+    user = getattr(request, "user", None)
+    if not user or not user.is_authenticated:
+        return user
+
+    if getattr(user, "is_platform_admin", False) or getattr(user, "role", "") == "admin":
+        target_id = None
+        if hasattr(request, "query_params") and request.query_params.get("company_user_id"):
+            target_id = request.query_params.get("company_user_id")
+        elif hasattr(request, "headers") and request.headers.get("X-Company-User-Id"):
+            target_id = request.headers.get("X-Company-User-Id")
+        elif hasattr(request, "GET") and request.GET.get("company_user_id"):
+            target_id = request.GET.get("company_user_id")
+        elif hasattr(request, "data") and isinstance(request.data, dict) and request.data.get("company_user_id"):
+            target_id = request.data.get("company_user_id")
+
+        if target_id:
+            try:
+                target_user = User.objects.filter(id=int(target_id)).first()
+                if target_user:
+                    return target_user
+            except (ValueError, TypeError):
+                pass
+    return user
 
 
 @api_view(["GET"])
@@ -484,12 +517,13 @@ class CompanyViews:
     @api_view(["GET", "PUT"])
     @permission_classes([IsAuthenticated])
     def company_detail(request):
-        company = company_service.get_company(None, request.user)
+        effective_user = resolve_target_user(request)
+        company = company_service.get_company(None, effective_user)
         if request.method == "GET":
             if not company:
                 from app.models.company import Company
                 company = Company.objects.create(
-                    user=request.user,
+                    user=effective_user,
                     company_name="My Company"
                 )
             return Response(CompanyResponseSerializer(company, context={"request": request}).data)
@@ -500,7 +534,7 @@ class CompanyViews:
             if not serializer.is_valid():
                 logger.error("Company validation failed: %s", serializer.errors)
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            company = company_service.update_company(None, request.user, serializer.validated_data)
+            company = company_service.update_company(None, effective_user, serializer.validated_data)
             logger.info("Company successfully updated: %s", company.company_name)
             return Response(CompanyResponseSerializer(company, context={"request": request}).data)
 
@@ -511,7 +545,8 @@ class CompanyViews:
     @throttle_classes([LogoUploadRateThrottle])
     def company_logo(request):
         require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Custom company branding")
-        company = company_service.get_company(None, request.user)
+        effective_user = resolve_target_user(request)
+        company = company_service.get_company(None, effective_user)
         if request.method == "POST":
             file_obj = request.FILES.get("file")
             if not file_obj:
@@ -522,13 +557,13 @@ class CompanyViews:
             
             if not company:
                 from app.models.company import Company
-                company = Company(user=request.user, company_name="My Company")
+                company = Company(user=effective_user, company_name="My Company")
                 company.save()
                 
             company.logo_data = logo_data
             company.primary_color = hex_color
             company.save()
-            logger.info("Logo uploaded for user %d — color: %s", request.user.id, hex_color)
+            logger.info("Logo uploaded for user %d — color: %s", effective_user.id, hex_color)
             return Response(CompanyResponseSerializer(company).data)
             
         elif request.method == "DELETE":
@@ -547,6 +582,7 @@ class EmployeeViews:
     @api_view(["GET", "POST"])
     @permission_classes([IsAuthenticated])
     def employee_list_create(request):
+        effective_user = resolve_target_user(request)
         if request.method == "GET":
             page = int(request.GET.get("page", 1))
             per_page = int(request.GET.get("per_page", 20))
@@ -554,11 +590,11 @@ class EmployeeViews:
             department = request.GET.get("department")
             sort_by = request.GET.get("sort") or request.GET.get("sort_by")
             status_param = request.GET.get("status", "active")
-            res = employee_service.list_employees(None, request.user, page, per_page, search, department, sort_by=sort_by, status=status_param)
+            res = employee_service.list_employees(None, effective_user, page, per_page, search, department, sort_by=sort_by, status=status_param)
             return Response(EmployeeListResponseSerializer(res).data)
         elif request.method == "POST":
-            employee_limit = get_employee_limit(request.user)
-            active_employee_count = Employee.objects.filter(user=request.user, is_active=True).count()
+            employee_limit = get_employee_limit(effective_user)
+            active_employee_count = Employee.objects.filter(user=effective_user, is_active=True).count()
             if employee_limit is not None and active_employee_count >= employee_limit:
                 raise ForbiddenError(
                     f"Your current plan supports up to {employee_limit} active employees. "
@@ -567,19 +603,19 @@ class EmployeeViews:
             send_invitation = bool(request.data.get("send_invitation", False))
             serializer = EmployeeCreateSerializer(data=request.data, context={"request": request})
             serializer.is_valid(raise_exception=True)
-            employee = employee_service.create_employee(None, request.user, serializer.validated_data)
+            employee = employee_service.create_employee(None, effective_user, serializer.validated_data)
 
             try:
                 from app.services.email_service import send_employee_added_notice_email
                 send_employee_added_notice_email(
-                    to_email=request.user.effective_notification_email,
+                    to_email=effective_user.effective_notification_email,
                     employee_name=employee.full_name,
                     employee_code=employee.employee_code,
                     designation=employee.designation or "",
-                    company_name=request.user.company_name,
+                    company_name=effective_user.company_name,
                 )
             except Exception:
-                logging.getLogger(__name__).warning("Employee-added HR notice failed for user %s", request.user.pk, exc_info=True)
+                logging.getLogger(__name__).warning("Employee-added HR notice failed for user %s", effective_user.pk, exc_info=True)
 
             email_sent = False
             if send_invitation and employee.email:
@@ -589,7 +625,7 @@ class EmployeeViews:
                     from attendance.security import issue_invite
                     invitation_token = issue_invite(employee)
                     portal_url = f"{frontend_url}/biometric"
-                    company_name = getattr(request.user, 'company_name', '') or getattr(request.user, 'company', '') or settings.APP_NAME
+                    company_name = getattr(effective_user, 'company_name', '') or getattr(effective_user, 'company', '') or settings.APP_NAME
                     email_sent = send_employee_registration_invitation_email(
                         to_email=employee.email,
                         employee_name=employee.full_name,
@@ -609,19 +645,20 @@ class EmployeeViews:
     @api_view(["GET", "PUT", "DELETE"])
     @permission_classes([IsAuthenticated])
     def employee_detail(request, employee_id):
+        effective_user = resolve_target_user(request)
         if request.method == "GET":
-            employee = employee_service.get_employee(None, request.user, employee_id)
+            employee = employee_service.get_employee(None, effective_user, employee_id)
             return Response(EmployeeResponseSerializer(employee).data)
         elif request.method == "PUT":
-            employee = employee_service.get_employee(None, request.user, employee_id)
+            employee = employee_service.get_employee(None, effective_user, employee_id)
             serializer = EmployeeUpdateSerializer(instance=employee, data=request.data, context={"request": request})
             serializer.is_valid(raise_exception=True)
             employee = employee_service.update_employee(
-                None, request.user, employee_id, serializer.validated_data
+                None, effective_user, employee_id, serializer.validated_data
             )
             return Response(EmployeeResponseSerializer(employee).data)
         elif request.method == "DELETE":
-            res = employee_service.delete_employee(None, request.user, employee_id)
+            res = employee_service.delete_employee(None, effective_user, employee_id)
             return Response(
                 {
                     "detail": f"Employee {res.get('full_name', '')} ({res.get('employee_code', '')}) has been deactivated and removed successfully.",
@@ -638,7 +675,8 @@ class EmployeeViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def send_invite(request, employee_id):
-        employee = employee_service.get_employee(None, request.user, employee_id)
+        effective_user = resolve_target_user(request)
+        employee = employee_service.get_employee(None, effective_user, employee_id)
         if not employee.email:
             return Response({"detail": "Employee has no email address configured."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -649,7 +687,7 @@ class EmployeeViews:
         portal_url = f"{frontend_url}/biometric"
         import urllib.parse
         registration_url = f"{portal_url}?tab=onboard&invite={urllib.parse.quote(invitation_token)}#invite={urllib.parse.quote(invitation_token)}"
-        company_name = getattr(request.user, 'company_name', '') or getattr(request.user, 'company', '') or settings.APP_NAME
+        company_name = getattr(effective_user, 'company_name', '') or getattr(effective_user, 'company', '') or settings.APP_NAME
 
         success = send_employee_registration_invitation_email(
             to_email=employee.email,
@@ -675,15 +713,17 @@ class EmployeeViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def reactivate_employee(request, employee_id):
+        effective_user = resolve_target_user(request)
         new_email = request.data.get("email")
-        employee = employee_service.reactivate_employee(None, request.user, employee_id, new_email=new_email)
+        employee = employee_service.reactivate_employee(None, effective_user, employee_id, new_email=new_email)
         return Response(EmployeeResponseSerializer(employee).data, status=status.HTTP_200_OK)
 
     @staticmethod
     @api_view(["DELETE"])
     @permission_classes([IsAuthenticated])
     def permanent_delete_employee(request, employee_id):
-        res = employee_service.permanent_delete_employee(None, request.user, employee_id)
+        effective_user = resolve_target_user(request)
+        res = employee_service.permanent_delete_employee(None, effective_user, employee_id)
         return Response(
             {
                 "detail": f"Employee {res.get('full_name', '')} ({res.get('employee_code', '')}) and all of their records have been permanently deleted.",
@@ -701,6 +741,7 @@ class SalarySlipViews:
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
     def salary_slip_list(request):
+        effective_user = resolve_target_user(request)
         page = int(request.GET.get("page", 1))
         per_page = int(request.GET.get("per_page", 20))
         month = request.GET.get("month")
@@ -711,7 +752,7 @@ class SalarySlipViews:
         year_val = int(year) if year else None
         emp_id_val = int(employee_id) if employee_id else None
         
-        res = salary_service.list_slips(None, request.user, page, per_page, month_val, year_val, emp_id_val)
+        res = salary_service.list_slips(None, effective_user, page, per_page, month_val, year_val, emp_id_val)
         return Response(SalarySlipListResponseSerializer(res).data)
 
     @staticmethod
@@ -719,30 +760,31 @@ class SalarySlipViews:
     @permission_classes([IsAuthenticated])
     def generate_slips(request):
         require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Bulk salary slip generation")
+        effective_user = resolve_target_user(request)
         serializer = GenerateSlipsRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         month = serializer.validated_data["month"]
         year = serializer.validated_data["year"]
-        slips = salary_service.generate_bulk_slips(None, request.user, month, year)
+        slips = salary_service.generate_bulk_slips(None, effective_user, month, year)
         if slips:
             try:
                 from app.services.email_service import send_slip_generation_summary_email
                 send_slip_generation_summary_email(
-                    to_email=request.user.effective_notification_email,
+                    to_email=effective_user.effective_notification_email,
                     count=len(slips),
                     month_name=calendar.month_name[month],
                     year=year,
-                    company_name=request.user.company_name,
+                    company_name=effective_user.company_name,
                 )
             except Exception:
-                logging.getLogger(__name__).warning("Slip-generation summary email failed for user %s", request.user.pk, exc_info=True)
+                logging.getLogger(__name__).warning("Slip-generation summary email failed for user %s", effective_user.pk, exc_info=True)
         attendance_pending = [
             item["employee_id"]
-            for item in attendance_service.get_attendance_readiness(request.user, month, year)
+            for item in attendance_service.get_attendance_readiness(effective_user, month, year)
             if not item["complete"] and not SalarySlip.objects.filter(
-                user=request.user, employee_id=item["employee_id"], month=month, year=year
+                user=effective_user, employee_id=item["employee_id"], month=month, year=year
             ).exists() and Employee.objects.filter(
-                user=request.user,
+                user=effective_user,
                 id=item["employee_id"],
                 date_of_joining__lte=date(year, month, calendar.monthrange(year, month)[1]),
             ).exists()
@@ -764,40 +806,43 @@ class SalarySlipViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def generate_single_slip(request, employee_id):
+        effective_user = resolve_target_user(request)
         serializer = GenerateSlipsRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         month = serializer.validated_data["month"]
         year = serializer.validated_data["year"]
         
-        employee = employee_service.get_employee(None, request.user, employee_id)
-        slip = salary_service.generate_slip_for_employee(None, request.user, employee, month, year)
+        employee = employee_service.get_employee(None, effective_user, employee_id)
+        slip = salary_service.generate_slip_for_employee(None, effective_user, employee, month, year)
         try:
             from app.services.email_service import send_slip_generated_email
             send_slip_generated_email(
-                to_email=request.user.effective_notification_email,
+                to_email=effective_user.effective_notification_email,
                 employee_name=employee.full_name,
                 month_name=calendar.month_name[month],
                 year=year,
-                company_name=request.user.company_name,
+                company_name=effective_user.company_name,
             )
         except Exception:
-            logging.getLogger(__name__).warning("Slip-generated email failed for user %s", request.user.pk, exc_info=True)
+            logging.getLogger(__name__).warning("Slip-generated email failed for user %s", effective_user.pk, exc_info=True)
         return Response(SalarySlipResponseSerializer(slip).data, status=status.HTTP_201_CREATED)
 
     @staticmethod
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
     def get_slip(request, slip_id):
-        slip = salary_service.get_slip(None, request.user, slip_id)
+        effective_user = resolve_target_user(request)
+        slip = salary_service.get_slip(None, effective_user, slip_id)
         return Response(SalarySlipResponseSerializer(slip).data)
 
     @staticmethod
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
     def download_pdf(request, slip_id):
+        effective_user = resolve_target_user(request)
         include_doj = request.GET.get("include_doj", "true").lower() == "true"
-        slip = salary_service.get_slip(None, request.user, slip_id)
-        company = company_service.get_company(None, request.user)
+        slip = salary_service.get_slip(None, effective_user, slip_id)
+        company = company_service.get_company(None, effective_user)
         
         from app.services.pdf_service import MONTH_NAMES, generate_pdf_bytes
         pdf_bytes = generate_pdf_bytes(slip, company, include_doj=include_doj)
@@ -816,13 +861,14 @@ class SalarySlipViews:
     @permission_classes([IsAuthenticated])
     @throttle_classes([EmailSlipRateThrottle])
     def email_slip(request, slip_id):
-        slip = salary_service.get_slip(None, request.user, slip_id)
+        effective_user = resolve_target_user(request)
+        slip = salary_service.get_slip(None, effective_user, slip_id)
         if not slip.employee.email:
             return Response({"sent": False, "message": "Employee has no email address configured."})
         if "@" not in slip.employee.email:
             return Response({"sent": False, "message": f"Invalid email address: {slip.employee.email}"})
             
-        company = company_service.get_company(None, request.user)
+        company = company_service.get_company(None, effective_user)
         if not settings.EMAIL_HOST_USER or not settings.EMAIL_HOST_PASSWORD:
             return Response({
                 "sent": False,
@@ -852,14 +898,14 @@ class SalarySlipViews:
             try:
                 from app.services.email_service import send_slip_emailed_notice_email
                 send_slip_emailed_notice_email(
-                    to_email=request.user.effective_notification_email,
+                    to_email=effective_user.effective_notification_email,
                     employee_name=slip.employee.full_name,
                     month_name=calendar.month_name[slip.month],
                     year=slip.year,
                     company_name=company_name,
                 )
             except Exception:
-                logging.getLogger(__name__).warning("Slip-emailed HR notice failed for user %s", request.user.pk, exc_info=True)
+                logging.getLogger(__name__).warning("Slip-emailed HR notice failed for user %s", effective_user.pk, exc_info=True)
             return Response({"sent": True, "message": f"Email sent to {slip.employee.email}"})
             
         return Response({
@@ -871,18 +917,20 @@ class SalarySlipViews:
     @api_view(["DELETE"])
     @permission_classes([IsAuthenticated])
     def delete_slip(request, slip_id):
-        salary_service.delete_slip(None, request.user, slip_id)
+        effective_user = resolve_target_user(request)
+        salary_service.delete_slip(None, effective_user, slip_id)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     @staticmethod
     @api_view(["GET", "DELETE"])
     @permission_classes([IsAuthenticated])
     def get_or_delete_slip(request, slip_id):
+        effective_user = resolve_target_user(request)
         if request.method == "GET":
-            slip = salary_service.get_slip(None, request.user, slip_id)
+            slip = salary_service.get_slip(None, effective_user, slip_id)
             return Response(SalarySlipResponseSerializer(slip).data)
         elif request.method == "DELETE":
-            salary_service.delete_slip(None, request.user, slip_id)
+            salary_service.delete_slip(None, effective_user, slip_id)
             return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -894,11 +942,12 @@ class AttendanceViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def mark_attendance(request):
+        effective_user = resolve_target_user(request)
         serializer = AttendanceCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         res = attendance_service.mark_attendance(
             None,
-            request.user,
+            effective_user,
             serializer.validated_data["employee_id"],
             serializer.validated_data["date"],
             serializer.validated_data["status"],
@@ -909,11 +958,12 @@ class AttendanceViews:
     @api_view(["POST"])
     @permission_classes([IsAuthenticated])
     def bulk_mark_leaves(request):
+        effective_user = resolve_target_user(request)
         serializer = AttendanceBulkCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         records = attendance_service.bulk_mark_leaves(
             None,
-            request.user,
+            effective_user,
             serializer.validated_data["employee_id"],
             serializer.validated_data["month"],
             serializer.validated_data["year"],
@@ -927,6 +977,7 @@ class AttendanceViews:
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
     def get_monthly_attendance(request):
+        effective_user = resolve_target_user(request)
         emp_id = request.GET.get("employee_id")
         if not emp_id:
             raise BadRequestError("employee_id, month, and year are required query params")
@@ -937,7 +988,7 @@ class AttendanceViews:
         except ValueError as exc:
             raise BadRequestError("employee_id must be a valid number") from exc
         records = attendance_service.get_monthly_attendance(
-            None, request.user, employee_id,
+            None, effective_user, employee_id,
             serializer.validated_data["month"], serializer.validated_data["year"],
         )
         return Response(AttendanceResponseSerializer(records, many=True).data)
@@ -946,10 +997,11 @@ class AttendanceViews:
     @api_view(["GET"])
     @permission_classes([IsAuthenticated])
     def get_readiness(request):
+        effective_user = resolve_target_user(request)
         serializer = GenerateSlipsRequestSerializer(data=request.GET)
         serializer.is_valid(raise_exception=True)
         return Response(attendance_service.get_attendance_readiness(
-            request.user, serializer.validated_data["month"], serializer.validated_data["year"]
+            effective_user, serializer.validated_data["month"], serializer.validated_data["year"]
         ))
 
     @staticmethod
@@ -957,10 +1009,11 @@ class AttendanceViews:
     @permission_classes([IsAuthenticated])
     def get_leave_summary(request):
         require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Attendance summaries")
+        effective_user = resolve_target_user(request)
         serializer = GenerateSlipsRequestSerializer(data=request.GET)
         serializer.is_valid(raise_exception=True)
         res = attendance_service.get_all_employees_leave_summary(
-            None, request.user, serializer.validated_data["month"], serializer.validated_data["year"],
+            None, effective_user, serializer.validated_data["month"], serializer.validated_data["year"],
         )
         return Response(EmployeeLeavesSummarySerializer(res, many=True).data)
 
@@ -974,12 +1027,13 @@ class DashboardViews:
     @permission_classes([IsAuthenticated])
     def get_stats(request):
         require_minimum_plan(request.user, PLAN_STARTER, "Dashboard overview")
+        effective_user = resolve_target_user(request)
         try:
             from app.services.plan_notification_service import check_and_notify_plan_expiry
             check_and_notify_plan_expiry(request.user)
         except Exception:
             logging.getLogger(__name__).warning("Plan-expiry check failed for user %s", request.user.pk, exc_info=True)
-        res = dashboard_service.get_dashboard_stats(None, request.user)
+        res = dashboard_service.get_dashboard_stats(None, effective_user)
         return Response(DashboardStatsSerializer(res).data)
 
     @staticmethod
@@ -987,9 +1041,10 @@ class DashboardViews:
     @permission_classes([IsAuthenticated])
     def get_payroll_summary(request):
         require_minimum_plan(request.user, PLAN_PROFESSIONAL, "Payroll dashboard and reports")
+        effective_user = resolve_target_user(request)
         month = request.GET.get("month", datetime.now().month)
         year = request.GET.get("year", datetime.now().year)
-        res = dashboard_service.get_payroll_summary(None, request.user, int(month), int(year))
+        res = dashboard_service.get_payroll_summary(None, effective_user, int(month), int(year))
         return Response(PayrollSummarySerializer(res).data)
 
     @staticmethod
@@ -997,7 +1052,8 @@ class DashboardViews:
     @permission_classes([IsAuthenticated])
     def get_department_breakdown(request):
         require_minimum_plan(request.user, PLAN_ENTERPRISE, "Department-wise payroll insights")
-        res = dashboard_service.get_department_breakdown(None, request.user)
+        effective_user = resolve_target_user(request)
+        res = dashboard_service.get_department_breakdown(None, effective_user)
         return Response(DepartmentBreakdownSerializer(res, many=True).data)
 
 
@@ -1022,6 +1078,30 @@ class AdminViews:
             "per_page": res["per_page"],
             "pages": res["pages"],
         })
+
+    @staticmethod
+    @api_view(["GET"])
+    @permission_classes([IsAdmin])
+    def list_companies(request):
+        require_minimum_plan(request.user, PLAN_ENTERPRISE, "User and account administration")
+        users = User.objects.all().select_related("company").order_by("full_name")
+        data = []
+        for u in users:
+            company_obj = getattr(u, "company", None)
+            c_name = company_obj.company_name if company_obj and company_obj.company_name else f"{u.full_name}'s Company"
+            emp_count = u.employees.filter(is_active=True).count()
+            data.append({
+                "user_id": u.id,
+                "user_name": u.full_name,
+                "email": u.email,
+                "role": u.role,
+                "is_platform_admin": u.is_platform_admin,
+                "is_active": u.is_active,
+                "plan": u.plan,
+                "company_name": c_name,
+                "employee_count": emp_count,
+            })
+        return Response({"companies": data})
 
     @staticmethod
     @api_view(["PUT", "DELETE"])

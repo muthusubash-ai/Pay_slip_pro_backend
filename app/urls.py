@@ -76,6 +76,8 @@ urlpatterns = [
     path("api/v1/admin/users", views.AdminViews.list_users, name="admin_list_users"),
     path("api/v1/admin/users/<int:user_id>", views.AdminViews.update_or_delete_user, name="admin_update_or_delete_user"),
     path("api/v1/admin/stats", views.AdminViews.platform_stats, name="admin_platform_stats"),
+    path("api/v1/admin/companies", views.AdminViews.list_companies, name="admin_list_companies"),
+    path("api/v1/admin/companies/", views.AdminViews.list_companies, name="admin_list_companies_slash"),
 
     # Custom Payment Routes
     path("api/v1/payments/create-order", views.PaymentViews.create_order, name="payment_create_order"),

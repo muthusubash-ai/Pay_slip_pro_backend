@@ -770,12 +770,30 @@ class OwnerView(APIView):
 def _owner_attendance_q(request):
     """Q filter scoping an Attendance/LeaveRequest queryset (both FK'd via `employee`)
     to request.user's own company, matching the scoping LeaveActionView already uses."""
+    effective_user = request.user
     if getattr(request.user, 'is_platform_admin', False) or getattr(request.user, 'is_superuser', False):
-        return Q()
-    user_company = getattr(request.user, 'company', None)
-    user_emp_codes = list(request.user.employees.values_list('employee_code', flat=True))
+        target_id = (
+            request.query_params.get("company_user_id")
+            or request.headers.get("X-Company-User-Id")
+            or (request.data.get("company_user_id") if hasattr(request, "data") and isinstance(request.data, dict) else None)
+        )
+        if target_id:
+            from app.models.user import User
+            try:
+                target_user = User.objects.filter(id=int(target_id)).first()
+                if target_user:
+                    effective_user = target_user
+                else:
+                    return Q()
+            except (ValueError, TypeError):
+                return Q()
+        else:
+            return Q()
+
+    user_company = getattr(effective_user, 'company', None)
+    user_emp_codes = list(effective_user.employees.values_list('employee_code', flat=True))
     q = (
-        Q(employee__payroll_employee__user=request.user) |
+        Q(employee__payroll_employee__user=effective_user) |
         Q(employee__payroll_employee__isnull=True, employee__emp_id__in=user_emp_codes)
     )
     if user_company:
@@ -785,18 +803,8 @@ def _owner_attendance_q(request):
 
 class LeaveActionView(OwnerView):
     def get(self, request):
-        if getattr(request.user, 'is_platform_admin', False) or getattr(request.user, 'is_superuser', False):
-            rows = list(LeaveRequest.objects.select_related('employee__payroll_employee').all().order_by('-created_at')[:200])
-        else:
-            user_company = getattr(request.user, 'company', None)
-            user_emp_codes = list(request.user.employees.values_list('employee_code', flat=True))
-            q = (
-                Q(employee__payroll_employee__user=request.user) |
-                Q(employee__payroll_employee__isnull=True, employee__emp_id__in=user_emp_codes)
-            )
-            if user_company:
-                q |= Q(employee__payroll_employee__user__company=user_company)
-            rows = list(LeaveRequest.objects.select_related('employee__payroll_employee').filter(q).order_by('-created_at')[:200])
+        q = _owner_attendance_q(request)
+        rows = list(LeaveRequest.objects.select_related('employee__payroll_employee').filter(q).order_by('-created_at')[:200])
 
         # Auto-link unlinked attendance employee if matching payroll employee exists
         for row in rows:

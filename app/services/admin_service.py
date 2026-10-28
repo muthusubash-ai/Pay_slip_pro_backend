@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def list_users(db, page: int = 1, per_page: int = 20) -> dict:
-    query = User.objects.all()
+    query = User.objects.all().select_related("company").order_by("id")
     total = query.count()
     pages = math.ceil(total / per_page) if per_page > 0 else 0
     items = list(query[(page - 1) * per_page : page * per_page])
