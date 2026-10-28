@@ -771,21 +771,37 @@ def _owner_attendance_q(request):
     """Q filter scoping an Attendance/LeaveRequest queryset (both FK'd via `employee`)
     to request.user's own company, matching the scoping LeaveActionView already uses."""
     effective_user = request.user
-    if getattr(request.user, 'is_platform_admin', False) or getattr(request.user, 'is_superuser', False):
+    is_admin = (
+        bool(getattr(request.user, "is_platform_admin", False))
+        or bool(getattr(request.user, "is_superuser", False))
+        or bool(getattr(request.user, "is_staff", False))
+        or str(getattr(request.user, "role", "")).strip().lower() in ("admin", "administrator")
+    )
+    if is_admin:
         target_id = (
-            request.query_params.get("company_user_id")
-            or request.headers.get("X-Company-User-Id")
+            (request.query_params.get("company_user_id") if hasattr(request, "query_params") else None)
+            or (request.GET.get("company_user_id") if hasattr(request, "GET") else None)
+            or (request.headers.get("X-Company-User-Id") if hasattr(request, "headers") else None)
+            or (request.headers.get("x-company-user-id") if hasattr(request, "headers") else None)
+            or (request.headers.get("company-user-id") if hasattr(request, "headers") else None)
+            or (request.META.get("HTTP_X_COMPANY_USER_ID") if hasattr(request, "META") else None)
+            or (request.META.get("HTTP_COMPANY_USER_ID") if hasattr(request, "META") else None)
             or (request.data.get("company_user_id") if hasattr(request, "data") and isinstance(request.data, dict) else None)
         )
-        if target_id:
-            from app.models.user import User
-            try:
-                target_user = User.objects.filter(id=int(target_id)).first()
-                if target_user:
-                    effective_user = target_user
-                else:
+        if target_id is not None:
+            clean_str = str(target_id).strip()
+            if clean_str and clean_str.lower() not in ("null", "undefined", "none", "0", ""):
+                from app.models.user import User
+                try:
+                    uid = int(clean_str)
+                    target_user = User.objects.filter(id=uid).first()
+                    if target_user:
+                        effective_user = target_user
+                    else:
+                        return Q()
+                except (ValueError, TypeError):
                     return Q()
-            except (ValueError, TypeError):
+            else:
                 return Q()
         else:
             return Q()

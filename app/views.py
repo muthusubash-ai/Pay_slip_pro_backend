@@ -199,26 +199,58 @@ def resolve_target_user(request):
     if not user or not user.is_authenticated:
         return user
 
-    if getattr(user, "is_platform_admin", False) or getattr(user, "role", "") == "admin":
+    is_admin = (
+        bool(getattr(user, "is_platform_admin", False))
+        or bool(getattr(user, "is_superuser", False))
+        or bool(getattr(user, "is_staff", False))
+        or str(getattr(user, "role", "")).strip().lower() in ("admin", "administrator")
+    )
+
+    if is_admin:
         target_id = None
+        # 1. DRF query params
         if hasattr(request, "query_params") and request.query_params.get("company_user_id"):
             target_id = request.query_params.get("company_user_id")
+        # 2. Django GET query dict
         elif hasattr(request, "GET") and request.GET.get("company_user_id"):
             target_id = request.GET.get("company_user_id")
-        elif hasattr(request, "headers") and request.headers.get("X-Company-User-Id"):
-            target_id = request.headers.get("X-Company-User-Id")
-        elif hasattr(request, "META") and request.META.get("HTTP_X_COMPANY_USER_ID"):
-            target_id = request.META.get("HTTP_X_COMPANY_USER_ID")
-        elif hasattr(request, "data") and isinstance(request.data, dict) and request.data.get("company_user_id"):
+        # 3. Request headers
+        elif hasattr(request, "headers"):
+            target_id = (
+                request.headers.get("X-Company-User-Id")
+                or request.headers.get("x-company-user-id")
+                or request.headers.get("company-user-id")
+            )
+        # 4. WSGI META headers
+        if not target_id and hasattr(request, "META"):
+            target_id = request.META.get("HTTP_X_COMPANY_USER_ID") or request.META.get("HTTP_COMPANY_USER_ID")
+        # 5. POST/PUT request body
+        if not target_id and hasattr(request, "data") and isinstance(request.data, dict):
             target_id = request.data.get("company_user_id")
 
-        if target_id:
-            try:
-                target_user = User.objects.filter(id=int(target_id)).first()
-                if target_user:
-                    return target_user
-            except (ValueError, TypeError):
-                pass
+        if target_id is not None:
+            clean_str = str(target_id).strip()
+            if clean_str and clean_str.lower() not in ("null", "undefined", "none", "0", ""):
+                try:
+                    uid = int(clean_str)
+                    target_user = User.objects.filter(id=uid).first()
+                    if target_user:
+                        logger.info(
+                            "resolve_target_user: Scoped admin '%s' to company user '%s' (id: %d)",
+                            user.email,
+                            target_user.email,
+                            uid,
+                        )
+                        return target_user
+                    else:
+                        logger.warning(
+                            "resolve_target_user: Admin '%s' requested unknown company user id: %d",
+                            user.email,
+                            uid,
+                        )
+                except (ValueError, TypeError) as ex:
+                    logger.warning("resolve_target_user: Invalid target_id %r: %s", target_id, ex)
+
     return user
 
 
